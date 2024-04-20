@@ -17,7 +17,7 @@ AprilTag data from AprilTag_ros2 pkg, which got camera data from Airsim topic:
 ```
 /airsim_node/[DroneName]/bottom_cam/Scene
 ```
-Airsim dose not have a UWB sensor or a derict yaw topic, so we obtain these two from Airsim topic
+Airsim dose not have a UWB sensor or a direct yaw topic, so we obtain these two from Airsim topic
 ```
 /airsim_node/[DroneName]/odom_local_ned
 ```
