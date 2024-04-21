@@ -18,46 +18,41 @@ ROS2-Airsim version: Zhang Bihui @ 20240419
 #include <string>
 #include <omp.h>
 #include <mutex>
-// #include <math.h>
 #include <cmath>
 #include <thread>
-// #include <shared_mutex>
-// #include <csignal>
-// #include <unistd.h>
-// #include <so3_math.h>//RotMtoEuler
-// #include <common_lib.h>
-#include <message_filters/subscriber.h>
-#include <message_filters/synchronizer.h>
-#include <message_filters/sync_policies/approximate_time.h>
 #include <Eigen/Dense>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-#include <ros/ros.h>
-#include <std_msgs/Float64.h>
-#include <std_msgs/UInt32.h>
-#include <nav_msgs/Path.h>
-#include <nav_msgs/Odometry.h>
-// #include <geometry_msgs/Pose2D.h>
-#include <geometry_msgs/Pose.h>
-#include <geometry_msgs/PoseWithCovarianceStamped.h>
-#include <geometry_msgs/Vector3.h>
-#include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/NavSatFix.h>
-#include <sensor_msgs/Imu.h>
-#include <visualization_msgs/Marker.h>
+// #include <message_filters/subscriber.h>
+// #include <message_filters/synchronizer.h>
+// #include <message_filters/sync_policies/approximate_time.h>
 
-#include "apriltag_ros/AprilTagDetection.h"
-#include "apriltag_ros/AprilTagDetectionArray.h"
-#include "fdilink_ahrs/satellite.h"
-#include "fdilink_ahrs/compass.h"
-#include "nlink_parser/LinktrackNodeframe2.h"
+#include "rclcpp/rclcpp.hpp"
+// #include <std_msgs/msg/Float64.h>
+// #include <std_msgs/msg/UInt32.h>
+#include <nav_msgs/msg/Path.h>
+#include <nav_msgs/msg/Odometry.h>
+#include <geometry_msgs/msg/Pose.h>
+#include <geometry_msgs/msg/PoseWithCovarianceStamped.h>
+#include <geometry_msgs/msg/quaternion.h>
+#include <sensor_msgs/msg/NavSatFix.h>
+#include <sensor_msgs/msg/Imu.h>
+#include <tf2/LinearMath/Quaternion.h>  // 四元数的定义
+#include <tf2/convert.h>                 // 用于转换的函数
+// #include <visualization_msgs/Marker.h>
 
-#include <tf/transform_datatypes.h>
+#include "apriltag_ros2/AprilTagDetection.h"
+#include "apriltag_ros2/AprilTagDetectionArray.h"
+// #include "fdilink_ahrs/satellite.h"
+// #include "fdilink_ahrs/compass.h"
+// #include "nlink_parser/LinktrackNodeframe2.h"
+
+#include <tf2/transform_datatypes.h>
 #include <eigen_conversions/eigen_msg.h>
 #include "sophus/so3.hpp"
 #include "sophus/se3.hpp"
 
-// #define OUTPUT_FOR_PAPER
+// #define OUTPUT_FOR_PLOTTING
 // #define LOW_PASS_FILTER
 #define D2R (3.14159/180.0)        // degree to radius
 #define R2D (180.0/3.14159)        // radius to degree
@@ -67,11 +62,11 @@ ROS2-Airsim version: Zhang Bihui @ 20240419
 /*------------------------------------------------控制参数---------------------------------------------*/
 int threshold_anchor_pos_ = 2;//参与计算 anchor_transition 的数据量阈值
 int threshold_anchor_yaw_ = 2;//参与计算 anchor_transition 的数据量阈值
-int threshold_gnss_star_ = 10;//gnss搜星数量阈值
+int threshold_gnss_star_ = 0;//gnss搜星数量阈值
 //噪声
-double R_init_COV = 0.0001;//初始P
-double P_init_COV = 0.0001;
-double V_init_COV = 0.0001;
+double R_INIT_COV = 0.0001;//初始P
+double P_INIT_COV = 0.0001;
+double V_INIT_COV = 0.0001;
 
 double COV_OMEGA_NOISE_DIAG = 0.001;//【角速度误差=陀螺仪误差】
 double COV_VEL_NOISE_DIAG = 0.002; //【速度误差】
@@ -230,23 +225,19 @@ LowPassFilter2pVector3d lp_filter_acc_{1000, cutoff_freq_};//采样频率，截�
 LowPassFilter2pVector3d lp_filter_ang_{1000, cutoff_freq_};//采样频率，截止频率
 #endif
 
-ros::Subscriber uwb_sub;
-ros::Subscriber tag_sub;
-ros::Subscriber gnss_gt_sub;
+// ros::Subscriber uwb_sub;
+// ros::Subscriber tag_sub;
+// ros::Subscriber gnss_gt_sub;
 // ros::Subscriber gnss_sub;
 // ros::Subscriber gnss_sat_sub;
-ros::Subscriber compass_sub;
-ros::Subscriber imu_sub;
-ros::Publisher pub_odom_filter_local;
-nav_msgs::Odometry odom_filter_local;
-ros::Publisher pub_odom_filter_global;
-nav_msgs::Odometry odom_filter_global;
-ros::Publisher pub_odom_reg_local;
-nav_msgs::Odometry odom_reg_local;
-ros::Publisher pub_odom_reg_global;
-nav_msgs::Odometry odom_reg_global;
-// ros::Publisher pubPath;
-// nav_msgs::Path path;
+// ros::Subscriber compass_sub;
+// ros::Subscriber imu_sub;
+rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_filter_local;
+rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_filter_global;
+nav_msgs::msg::Odometry odom_filter_local;
+nav_msgs::msg::Odometry odom_filter_global;
+
+
 
 StatesGroup state_;                                         //fliter local 变量
 FILE * m_state_fp;
@@ -259,9 +250,9 @@ double time_imu_last_ = 0;
 double time_tag_last_ = 0;
 double time_uwb_last_ = 0;
 
-sensor_msgs::ImuConstPtr last_imu_;                    //IMU buffer末数据
+sensor_msgs::msg::ImuConstPtr last_imu_;                    //IMU buffer末数据
 bool last_imu_flag_ = false;                           //whether there is a last_imu_ data
-std::deque<sensor_msgs::Imu::ConstPtr> buf_imu_;       //data buffer for IMU
+std::deque<sensor_msgs::msg::Imu::ConstPtr> buf_imu_;       //data buffer for IMU
 
 std::deque<Eigen::Vector3d> buf_pos_gnss_global_;      //gnss数据频率1hz
 Eigen::Matrix3d rot_gnss_global_ = Eigen::Matrix3d::Identity();  //just eye
@@ -307,7 +298,7 @@ Eigen::Matrix3d R_ecef_local_transition_;              //       filter local到g
 Eigen::Matrix3d R_ecef_enu_;                           //rotation from ENU to ECEF, 从uwb经纬度计算得到
 double cost_time_;
 
-#ifdef OUTPUT_FOR_PAPER
+#ifdef OUTPUT_FOR_PLOTTING
 FILE* fp_gnss_gt;
 FILE* fp_sensor_pos;
 FILE* fp_fusion_pos;
@@ -364,7 +355,7 @@ bool check_state( StatesGroup &state_inout )
 }
 
 //imu buffer数据积分，更新状态变量、协方差矩阵、状态变量残差；第一次调用时state_为0；大约消耗0.2ms
-void Imu_Process(const std::deque<sensor_msgs::Imu::ConstPtr>& buf_imu, StatesGroup& state_inout, Eigen::MatrixXd d_state_inout)
+void Imu_Process(const std::deque<sensor_msgs::msg::Imu::ConstPtr>& buf_imu, StatesGroup& state_inout, Eigen::MatrixXd d_state_inout)
 {
   std::cout<< "Imu_Process......" <<std::endl;
   if(buf_imu.empty()) {
@@ -390,10 +381,10 @@ void Imu_Process(const std::deque<sensor_msgs::Imu::ConstPtr>& buf_imu, StatesGr
   double dt = 0;
 
   //IMU数据序列内计算积分、更新协方差矩阵、更新误差状态变量
-  for ( std::deque<sensor_msgs::Imu::ConstPtr>::iterator it_imu = v_imu.begin(); it_imu != ( v_imu.end() - 1 ); it_imu++ )
+  for ( std::deque<sensor_msgs::msg::Imu::ConstPtr>::iterator it_imu = v_imu.begin(); it_imu != ( v_imu.end() - 1 ); it_imu++ )
   {
-    sensor_msgs::Imu::ConstPtr head = *( it_imu );//it_imu是deque元素的指针，deque元素类型是sensor_msgs::Imu::ConstPtr
-    sensor_msgs::Imu::ConstPtr tail = *( it_imu + 1 );
+    sensor_msgs::msg::Imu::ConstPtr head = *( it_imu );//it_imu是deque元素的指针，deque元素类型是sensor_msgs::Imu::ConstPtr
+    sensor_msgs::msg::Imu::ConstPtr tail = *( it_imu + 1 );
     //平均角速度、加速度
     angvel_avg << 0.5 * ( head->angular_velocity.x + tail->angular_velocity.x ), 0.5 * ( head->angular_velocity.y + tail->angular_velocity.y ),
         0.5 * ( head->angular_velocity.z + tail->angular_velocity.z );
@@ -522,35 +513,49 @@ Eigen::Vector3d ecef_xyz2blh(Eigen::Vector3d& xyz)//wgs84标准下xyz转经Breit
   return blh;
 }
 
-void initializel_tag(const std::string tag_file)//tag_file没有后缀名
+void initializel_uwb(const std::vector<double> uwb_params)//uwb_file没有后缀名
 {
-  //从与tagfile同名的.dat文件读取tag原点的ECEF系xyz坐标和ENU系yaw
-  std::string tag_anchor = tag_file + ".dat";
-  std::ifstream infile;
-  infile.open(tag_anchor.data());//将文件流对象和文件连接起来
-  assert(infile.is_open());
-  double d1,d2,d3;
-  infile >> d1;//【赞美斌哥】
-  infile >> d2;
-  infile >> d3;
-  anchor_tag0_blh_ << d1,d2,d3;
-  infile >> yaw_tagbase_enu_;
+  if (!uwb_params.empty()) {
+      anchor_uwb_blh_ << uwb_params[0],uwb_params[1],uwb_params[2];
+      double yaw_uwb_enu = uwb_params[3];
+  } else {
+    RCLCPP_ERROR(node->get_logger(), "empty uwb_params!!!!!!");
+  }
 
-  infile >> d1;//【赞美斌哥】
-  infile >> d2;
-  infile >> d3;
-  anchor_tag1_blh_ << d1,d2,d3;
+  anchor_uwb_xyz_ = ecef_blh2xyz(anchor_uwb_blh_);
+  std::cout<<std::endl<<"uwb's anchor in BLH = "<<std::endl<<anchor_uwb_blh_;
+  std::cout<<std::endl<<"uwb's anchor in xyz = "<<std::endl<<anchor_uwb_xyz_;
+  std::cout<<std::endl<<"uwb' yaw in degree = " <<yaw_uwb_enu;
 
-  infile >> d1;//【赞美斌哥】
-  infile >> d2;
-  infile >> d3;
-  anchor_tag2_blh_ << d1,d2,d3;
+  //anchor确定了ENU坐标和ECEF坐标的转换关系
+  double lat = anchor_uwb_blh_.x()*D2R, lon = anchor_uwb_blh_.y()*D2R;//经纬
+  double sin_lat = sin(lat), cos_lat = cos(lat);
+  double sin_lon = sin(lon), cos_lon = cos(lon);
+  R_ecef_enu_ << -sin_lon, -sin_lat*cos_lon, cos_lat*cos_lon,
+                  cos_lon, -sin_lat*sin_lon, cos_lat*sin_lon,
+                  0      ,  cos_lat        , sin_lat;
+  double sin_yaw_diff = std::sin(yaw_uwb_enu*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!
+  double cos_yaw_diff = std::cos(yaw_uwb_enu*D2R);
+  Eigen::Matrix3d R_enu_local;
+  R_enu_local << cos_yaw_diff, -sin_yaw_diff, 0,
+                 sin_yaw_diff,  cos_yaw_diff, 0,
+                 0           ,  0           , 1;
+  R_ecef_local_uwb_ = R_ecef_enu_ * R_enu_local;
+  uwbbase_ready_ = true;
+  std::cout<<std::endl<<"uwb are ready!!!" <<std::endl;
+}
 
-  infile >> d1;//【赞美斌哥】
-  infile >> d2;
-  infile >> d3;
-  anchor_tag3_blh_ << d1,d2,d3;
-  infile.close();
+void initializel_tag(const std::vector<double> tag_params)//tag_file没有后缀名
+{
+  if (!tag_params.empty()) {
+      anchor_tag0_blh_ << uwb_params[0],uwb_params[1],uwb_params[2];
+      double yaw_tagbase_enu_ = uwb_params[3];
+      anchor_tag1_blh_ << uwb_params[4],uwb_params[5],uwb_params[6];
+      anchor_tag2_blh_ << uwb_params[7],uwb_params[8],uwb_params[9];
+      anchor_tag3_blh_ << uwb_params[10],uwb_params[11],uwb_params[12];
+  } else {
+    RCLCPP_ERROR(node->get_logger(), "empty tag_params!!!!!!");
+  }
 
   anchor_tag0_xyz_ = ecef_blh2xyz(anchor_tag0_blh_);
   anchor_tag1_xyz_ = ecef_blh2xyz(anchor_tag1_blh_);
@@ -576,45 +581,6 @@ void initializel_tag(const std::string tag_file)//tag_file没有后缀名
   R_ecef_local_tag_ = R_ecef_enu_ * R_enu_local;
   tagbase_ready_ = true;
   std::cout<<std::endl<<"Tags are ready!!!" <<std::endl;
-}
-
-void initializel_uwb(const std::string uwb_file)//uwb_file没有后缀名
-{
-  //从与uwb_file同名的.dat文件读取uwb原点的ECEF系xyz坐标和ENU系yaw
-  std::string uwb_anchor = uwb_file + ".dat";
-  std::ifstream infile;
-  infile.open(uwb_anchor.data());//将文件流对象和文件连接起来
-  assert(infile.is_open());
-  double d1,d2,d3;
-  infile >> d1;//
-  infile >> d2;
-  infile >> d3;
-  anchor_uwb_blh_ << d1,d2,d3;
-  double yaw_uwb_enu;
-  infile >> yaw_uwb_enu;
-  infile.close();
-
-  anchor_uwb_xyz_ = ecef_blh2xyz(anchor_uwb_blh_);
-  std::cout<<std::endl<<"uwb's anchor in BLH = "<<std::endl<<anchor_uwb_blh_;
-  std::cout<<std::endl<<"uwb's anchor in xyz = "<<std::endl<<anchor_uwb_xyz_;
-  std::cout<<std::endl<<"uwb' yaw in degree = " <<yaw_uwb_enu;
-
-  //anchor确定了ENU坐标和ECEF坐标的转换关系
-  double lat = anchor_uwb_blh_.x()*D2R, lon = anchor_uwb_blh_.y()*D2R;//经纬
-  double sin_lat = sin(lat), cos_lat = cos(lat);
-  double sin_lon = sin(lon), cos_lon = cos(lon);
-  R_ecef_enu_ << -sin_lon, -sin_lat*cos_lon, cos_lat*cos_lon,
-                  cos_lon, -sin_lat*sin_lon, cos_lat*sin_lon,
-                  0      ,  cos_lat        , sin_lat;
-  double sin_yaw_diff = std::sin(yaw_uwb_enu*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!
-  double cos_yaw_diff = std::cos(yaw_uwb_enu*D2R);
-  Eigen::Matrix3d R_enu_local;
-  R_enu_local << cos_yaw_diff, -sin_yaw_diff, 0,
-                 sin_yaw_diff,  cos_yaw_diff, 0,
-                 0           ,  0           , 1;
-  R_ecef_local_uwb_ = R_ecef_enu_ * R_enu_local;
-  uwbbase_ready_ = true;
-  std::cout<<std::endl<<"uwb are ready!!!" <<std::endl;
 }
 
 bool isIdentity(const Eigen::MatrixXd& mat, double precision = 1e-7)
@@ -646,7 +612,7 @@ void filter_global2local(const Eigen::Vector3d& pos_global, const Eigen::Matrix3
     state.head<3>() << 0,0,0;
     std::cout<<"ONLY position" <<std::endl;    
 
-#ifdef OUTPUT_FOR_PAPER
+#ifdef OUTPUT_FOR_PLOTTING
   std::string bufferfile = std::to_string(state_.last_update_time) + "," + std::to_string(pos_local(0))+ "," 
                          + std::to_string(pos_local(1))+ "," + std::to_string(pos_local(2)) + "\n";
   const char* buffer_file = bufferfile.c_str();
@@ -732,20 +698,43 @@ void uwb_local2global(const Eigen::Vector3d& pos_local, Eigen::Vector3d& pos_glo
     pos_global = R_ecef_local_uwb_ * pos_local + anchor_uwb_xyz_; 
 }
 
-void uwb_callback(const nlink_parser::LinktrackNodeframe2& uwbs)
+void fake_compass_uwb_callback(const nav_msgs::msg::Odometry& odom)
 {
-  std::cout<< "uwb_callback......" <<std::endl;
+  std::cout<< "fake_compass_uwb_callback......" <<std::endl;
+
+
   Eigen::Vector3d pos_local, pos_uwb_global;
-  // pos_local << uwbs.pos_3d[0], uwbs.pos_3d[1], -uwbs.pos_3d[2];//Anchor全部位于一个平面时候，UWB系统无法区分Tag位于平面上还是下，默认取负值!
-  pos_local << uwbs.pos_3d[0]+0.3, uwbs.pos_3d[1]+0.25, -uwbs.pos_3d[2];//nodeframe2_0在右!!
+  pos_local << odom.pose.pose.position.x, odom.pose.pose.position.y, odom.pose.pose.position.z;
   uwb_local2global(pos_local, pos_uwb_global);
-  time_uwb_last_ = uwbs.header.stamp.toSec();//LinktrackNodeframe2没有header！添加
+  time_uwb_last_ = odom.header.stamp.toSec();
   mtx_uwb.lock();
   buf_pos_uwb_global_.push_back(pos_uwb_global);
   mtx_uwb.unlock();
+
+  double compass_roll, compass_pitch, compass_yaw; // 【yaw基准是真北】
+  tf2::Quaternion tf2_quat;  // tf2中的四元数类型
+  tf2::convert(odom.pose.pose.orientation, tf2_quat);  // 将ROS 2消息转换为tf2四元数
+  tf2::Matrix3x3 mat(tf2_quat);  // 从四元数生成旋转矩阵
+  mat.getRPY(compass_roll, compass_pitch, compass_yaw);  // 从旋转矩阵获取RPY
+  printf("eular angles = %lf %lf %lf \n", compass_roll*R2D, compass_pitch*R2D, compass_yaw*R2D);                  // Angle  [1-3]
+
+  Eigen::Vector3d pos_gnss_global;
+  Eigen::Matrix3d rot_compass_global;
+  Eigen::Matrix3d rot_gnss_enu;
+  rot_gnss_enu = Eigen::AngleAxisd(compass_yaw, Eigen::Vector3d::UnitZ()) *
+                 Eigen::AngleAxisd(compass_pitch, Eigen::Vector3d::UnitY()) *
+                 Eigen::AngleAxisd(compass_roll, Eigen::Vector3d::UnitX());
+  rot_compass_global = R_ecef_enu_*rot_gnss_enu;         //R_ecef_enu_ 是近似使用map计算得到的
+
+  mtx_compass.lock(); // 写独占锁，等待读锁全部释放
+  buf_rot_compass_global_.push_back(rot_compass_global);
+  buf_compass_yaw_enu_.push_back(compass_yaw);
+  mtx_compass.unlock();
+
+  time_compass_last_ = odom.header.stamp.toSec();
 }
 
-void tag_callback(const apriltag_ros::AprilTagDetectionArray& tags) //callback still run even if there is no detections!
+void tag_callback(const apriltag_ros2::AprilTagDetectionArray& tags) //callback still run even if there is no detections!
 {
   std::cout<< "tag_callback......" <<std::endl;
   int size = tags.detections.size();//多个tag时id顺序不稳定，同时出现哪个更准？取平均！
@@ -783,7 +772,7 @@ void tag_callback(const apriltag_ros::AprilTagDetectionArray& tags) //callback s
   /////////////////////////////////////只用第一个tag，不求平均!!!
   id = tags.detections[0].id[0];
 
-  geometry_msgs::Pose pose_temp;
+  geometry_msgs::msg::Pose pose_temp;
   pose_temp.position = tags.detections[0].pose.pose.pose.position;
   // pose_temp.orientation.x = tags.detections[0].pose.pose.pose.orientation.x;// tag orientation bad! use compass orientation!
   // pose_temp.orientation.y = tags.detections[0].pose.pose.pose.orientation.y;
@@ -840,8 +829,8 @@ void tag_callback(const apriltag_ros::AprilTagDetectionArray& tags) //callback s
   mtx_tag.unlock();
 }
 
-#ifdef OUTPUT_FOR_PAPER
-void gnss_gt_callback(const sensor_msgs::NavSatFix& data)//
+#ifdef OUTPUT_FOR_PLOTTING
+void gnss_gt_callback(const sensor_msgs::msg::NavSatFix& data)//
 {
   // std::cout<<"gnss_gt data callback~~~~~~ ~~~~~~" <<std::endl;
   Eigen::Vector3d blh;
@@ -858,7 +847,7 @@ void gnss_gt_callback(const sensor_msgs::NavSatFix& data)//
 }
 #endif
 
-void gnss_callback(const sensor_msgs::NavSatFixConstPtr& data_gnss, const fdilink_ahrs::satelliteConstPtr& data_sat)//
+void gnss_callback(const sensor_msgs::msg::NavSatFixConstPtr& data_gnss)//
 {
   std::cout<< "gnss_callback......" <<std::endl;
   Eigen::Vector3d blh;
@@ -871,43 +860,11 @@ void gnss_callback(const sensor_msgs::NavSatFixConstPtr& data_gnss, const fdilin
   mtx_gnss.unlock();
 
   time_gnss_last_ = data_gnss->header.stamp.toSec();
-  star_num_gnss_ = data_sat->num_satellites;
-  std::cout<< star_num_gnss_ <<std::endl;    
+  // star_num_gnss_ = data_sat->num_satellites;
+  // std::cout<< star_num_gnss_ <<std::endl;    
 }
 
-void compass_callback(const fdilink_ahrs::compassConstPtr& data_mag)//
-{
-  std::cout<< "compass_callback......" <<std::endl;
-
-  double compass_roll, compass_pitch, compass_yaw;
-  Eigen::Vector3d pos_gnss_global;
-  Eigen::Matrix3d rot_compass_global;
-
-  compass_roll = 3.1415 - data_mag->roll;   //<rad> fdilink 传感器倒放!
-  compass_pitch = -data_mag->pitch;   //<rad>
-  compass_yaw = - data_mag->heading;   //<rad>                                                                 【基准是真北】
-  printf("eular angles = %lf %lf %lf \n", compass_roll*R2D, compass_pitch*R2D, compass_yaw*R2D);                  // Angle  [1-3]
-
-  // double sin_yaw_diff = std::sin(compass_yaw);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!!!!!!!!!!!!!!!!!!!!!!!!
-  // double cos_yaw_diff = std::cos(compass_yaw);
-  Eigen::Matrix3d rot_gnss_enu;
-  // rot_gnss_enu << cos_yaw_diff, -sin_yaw_diff, 0,
-  //                 sin_yaw_diff,  cos_yaw_diff, 0,
-  //                 0           ,  0           , 1;
-  rot_gnss_enu = Eigen::AngleAxisd(compass_yaw, Eigen::Vector3d::UnitZ()) *
-                 Eigen::AngleAxisd(compass_pitch, Eigen::Vector3d::UnitY()) *
-                 Eigen::AngleAxisd(compass_roll, Eigen::Vector3d::UnitX());
-  rot_compass_global = R_ecef_enu_*rot_gnss_enu;         //R_ecef_enu_ 是近似使用map计算得到的
-
-  mtx_compass.lock(); // 写独占锁，等待读锁全部释放
-  buf_rot_compass_global_.push_back(rot_compass_global);
-  buf_compass_yaw_enu_.push_back(compass_yaw);
-  mtx_compass.unlock();
-
-  time_compass_last_ = data_mag->header.stamp.toSec();
-}
-
-void imu_callback(const sensor_msgs::ImuPtr &imu_msg)
+void imu_callback(const sensor_msgs::msg::ImuPtr &imu_msg)
 {
   if(!transition_ready_)
   {
@@ -940,9 +897,9 @@ void filtering_process()
   Eigen::Matrix<double, DIM_OF_STATES, 1> d_state;
   d_state.setZero();
   //设置状态变量初始协方差矩阵
-  state_.cov.block(0, 0, 3, 3) = Eigen::Matrix3d::Identity() * R_init_COV;   //   1e-5
-  state_.cov.block(3, 3, 3, 3) = Eigen::Matrix3d::Identity() * P_init_COV;   //   1e-5
-  state_.cov.block(6, 6, 3, 3) = Eigen::Matrix3d::Identity() * V_init_COV;   //   1e-5
+  state_.cov.block(0, 0, 3, 3) = Eigen::Matrix3d::Identity() * R_INIT_COV;   //   1e-5
+  state_.cov.block(3, 3, 3, 3) = Eigen::Matrix3d::Identity() * P_INIT_COV;   //   1e-5
+  state_.cov.block(6, 6, 3, 3) = Eigen::Matrix3d::Identity() * V_INIT_COV;   //   1e-5
   while(ros::ok())
   {
     double time_start = ros::Time::now().toSec();
@@ -1221,7 +1178,7 @@ void filtering_process()
     // dump_filter_state_to_log(m_state_fp);
     // filter_flag_ = 0;
 
-#ifdef OUTPUT_FOR_PAPER
+#ifdef OUTPUT_FOR_PLOTTING
   std::string bufferfile = std::to_string(state_.last_update_time) + "," + std::to_string(state_.pos_end(0))+ "," 
                          + std::to_string(state_.pos_end(1))+ "," + std::to_string(state_.pos_end(2)) + "\n";
   const char* buffer_file = bufferfile.c_str();
@@ -1231,7 +1188,7 @@ void filtering_process()
     /******* Publish Odometry-filter-local ******/
     Eigen::Quaterniond qe = Eigen::Quaterniond(state_.rot_end);
     qe.normalize();
-    geometry_msgs::Quaternion qg;
+    geometry_msgs::msg::Quaternion qg;
     tf::quaternionEigenToMsg(qe, qg);//#include <eigen_conversions/eigen_msg.h>不能少，CMakeList添加eigen_conversions
     odom_filter_local.header.frame_id = "world";
     odom_filter_local.header.stamp = ros::Time::now(); // ros::Time().fromSec(state_.last_update_time);
@@ -1377,39 +1334,51 @@ void initialization_process()
 
 int main(int argc, char **argv) 
 {
-  ros::init(argc, argv, "vtol_msn");
-  ros::NodeHandle nh("~");
-  ROS_INFO("////////////////////////Initialization//////////////////////////");
+  rclcpp::init(argc, argv);
+  auto node = rclcpp::Node::make_shared("vtol_msn_takeoff_landing");
+  RCLCPP_INFO(node->get_logger(), "////////////////////////Initialization//////////////////////////");
 
-  std::string tag_file;//不含后缀名
-  nh.getParam("tag_file", tag_file);
-  std::cout<< "tag_file:"<< tag_file <<std::endl;
-  std::string uwb_file;//不含后缀名
-  nh.getParam("uwb_file", uwb_file);
-  std::cout<< "uwb_file:"<< uwb_file <<std::endl;
-  nh.getParam("gnss_cov", GNSS_OBSERVE_COV);
-  std::cout<< "GNSS_OBSERVE_COV:"<< GNSS_OBSERVE_COV <<std::endl;
+  node->declare_parameter("tag_params", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("uwb_params", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("gnss_observe_cov", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("tag_observe_cov", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("uwb_observe_cov", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("init_cov", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("omega_noise", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("vel_noise", rclcpp::PARAMETER_NOT_SET);
+  node->declare_parameter("acc_noise", rclcpp::PARAMETER_NOT_SET);
 
-  nh.getParam("tag_cov", TAG_OBSERVE_COV);
-  std::cout<< "TAG_OBSERVE_COV:"<< TAG_OBSERVE_COV <<std::endl;
-  nh.getParam("uwb_cov", UWB_OBSERVE_COV);
-  std::cout<< "UWB_OBSERVE_COV:"<< UWB_OBSERVE_COV <<std::endl;
-  nh.getParam("R_init_COV", R_init_COV);
-  std::cout<< "R_init_COV:"<< R_init_COV <<std::endl;
-  nh.getParam("P_init_COV", P_init_COV);
-  std::cout<< "P_init_COV:"<< P_init_COV <<std::endl;
-  nh.getParam("V_init_COV", V_init_COV);
-  std::cout<< "V_init_COV:"<< V_init_COV <<std::endl;
-  nh.getParam("omega_noise", COV_OMEGA_NOISE_DIAG);
-  std::cout<< "COV_OMEGA_NOISE_DIAG:"<< COV_OMEGA_NOISE_DIAG <<std::endl;
-  nh.getParam("vel_noise", COV_VEL_NOISE_DIAG);
-  std::cout<< "COV_VEL_NOISE_DIAG:"<< COV_VEL_NOISE_DIAG <<std::endl;  
-  nh.getParam("acc_noise", COV_ACC_NOISE_DIAG);
-  std::cout<< "COV_ACC_NOISE_DIAG:"<< COV_ACC_NOISE_DIAG <<std::endl;
+  try{
+    auto tag_params = node->get_parameter("tag_params").as_double_array();
+    auto uwb_params = node->get_parameter("uwb_params").as_double_array();
+    GNSS_OBSERVE_COV = node->get_parameter("gnss_observe_cov").as_double();
+    TAG_OBSERVE_COV = node->get_parameter("tag_observe_cov").as_double();
+    UWB_OBSERVE_COV = node->get_parameter("uwb_observe_cov").as_double();
+    R_INIT_COV = node->get_parameter("init_cov").as_double();
+    P_INIT_COV = R_INIT_COV;
+    V_INIT_COV = R_INIT_COV;
+    COV_OMEGA_NOISE_DIAG = node->get_parameter("omega_noise").as_double();
+    COV_VEL_NOISE_DIAG = node->get_parameter("vel_noise").as_double();
+    COV_ACC_NOISE_DIAG = node->get_parameter("acc_noise").as_double();
 
+    std::cout<< "tag_params:"<< tag_params <<std::endl;
+    std::cout<< "tag_params:"<< tag_params <<std::endl;
+    std::cout<< "GNSS_OBSERVE_COV:"<< GNSS_OBSERVE_COV <<std::endl;
+    std::cout<< "TAG_OBSERVE_COV:"<< TAG_OBSERVE_COV <<std::endl;
+    std::cout<< "UWB_OBSERVE_COV:"<< UWB_OBSERVE_COV <<std::endl;
+    std::cout<< "R_INIT_COV:"<< R_INIT_COV <<std::endl;
+    std::cout<< "P_INIT_COV:"<< P_INIT_COV <<std::endl;
+    std::cout<< "V_INIT_COV:"<< V_INIT_COV <<std::endl;
+    std::cout<< "COV_OMEGA_NOISE_DIAG:"<< COV_OMEGA_NOISE_DIAG <<std::endl;
+    std::cout<< "COV_VEL_NOISE_DIAG:"<< COV_VEL_NOISE_DIAG <<std::endl;  
+    std::cout<< "COV_ACC_NOISE_DIAG:"<< COV_ACC_NOISE_DIAG <<std::endl;
+  }catch(const rclcpp::ParameterNotDeclaredException & ex) {
+    RCLCPP_ERROR(node->get_logger(), "Error getting parameters: %s", ex.what());
+    return;
+  }
 
   /*
-  //sensor_msgs/NavSatFix，又包含sensor_msgs/NavSatStatus = Navigation Satellite fix status + Global Navigation Satellite System service type
+  //sensor_msgs/msg/NavSatFix，又包含sensor_msgs/msg/NavSatStatus = Navigation Satellite fix status + Global Navigation Satellite System service type
   // status: 
   // int8 STATUS_NO_FIX=-1
   // int8 STATUS_FIX=0        # 通过QGC的EKF2_REQ_NSATS设置阈值(默认6)
@@ -1417,23 +1386,13 @@ int main(int argc, char **argv)
   // int8 STATUS_GBAS_FIX=2   # with ground-based augmentation
   // service: uint16 SERVICE_GPS=1, uint16 SERVICE_GLONASS=2, uint16 SERVICE_COMPASS=4, uint16 SERVICE_GALILEO=8
   */
-  //sensor_msgs/NavSatFix, 基于WGS84的经纬[deg]高[m]，GVINS用的是ECEF坐标WGS84标准
-  // gnss_gt_sub = nh.subscribe("/ublox_driver/receiver_lla", 10, gnss_gt_callback);//sensor_msgs/NavSatFixg格式 【10hz】【差分ublox作为真值】
+  //sensor_msgs/msg/NavSatFix, 基于WGS84的经纬[deg]高[m]，GVINS用的是ECEF坐标WGS84标准
+  auto gnss_sub = node->create_subscription<sensor_msgs::msg::NavSatFix>("/airsim_node/Drone51/global_gps", 10, gnss_callback);//【？hz】
+  auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>("/airsim_node/Drone51/imu/imu", 200, imu_callback);//【？hz】
+  auto tag_sub = node->create_subscription<apriltag_ros2::AprilTagDetectionArray>("/tag_detections", 10, tag_callback);//【？hz】
+  auto compass_uwb_sub = node->create_subscription<nav_msgs::msg::Odometry>("/airsim_node/Drone51/odom_local_ned", 10, fake_compass_uwb_callback);//【？hz】   
 
-  //当前三种数据全部来自于FDI，也可以用ExactTime，但是考虑到使用其他数据源的可能性选择了ApproximateTime
-  message_filters::Subscriber<sensor_msgs::NavSatFix> gnss_sub(nh, "/raw_gnss", 10);//sensor_msgs/NavSatFixg格式【1hz】
-  message_filters::Subscriber<fdilink_ahrs::satellite> gnss_sat_sub(nh, "/satellite", 10);//【1hz】
-  typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::NavSatFix, fdilink_ahrs::satellite> MySyncPolicy;
-  message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(10), gnss_sub, gnss_sat_sub);
-  sync.registerCallback(boost::bind(&gnss_callback, _1, _2));
-
-  imu_sub = nh.subscribe("/imu", 200, imu_callback, ros::TransportHints().tcpNoDelay());//【100hz】
-  compass_sub = nh.subscribe("/mag_pose", 10, compass_callback);//【5hz】 
-  tag_sub = nh.subscribe("/tag_detections", 10, tag_callback); //【5hz】
-  uwb_sub = nh.subscribe("/nlink_linktrack_nodeframe2", 10, uwb_callback); //【5hz】      
-  // uwb_sub = nh.subscribe("/nlink_linktrack_nodeframe2_0", 10, uwb_callback); //【5hz】      
-
-#ifdef OUTPUT_FOR_PAPER
+#ifdef OUTPUT_FOR_PLOTTING
   std::string filename_gnss_gt = "/home/zbh/gt_data.dat"; 
   const char* file_name_gnss_gt = filename_gnss_gt.c_str();
   fp_gnss_gt = fopen(file_name_gnss_gt,"w");
@@ -1444,12 +1403,12 @@ int main(int argc, char **argv)
   const char* file_name_fusion_pos = filename_fusion_pos.c_str();
   fp_fusion_pos = fopen(file_name_fusion_pos,"w");
 #else
-  pub_odom_filter_local = nh.advertise<nav_msgs::Odometry>("/vtol_msn/odom_filter_local", 1000);//【不再处理姿态数据！只发布xyz！】
-  pub_odom_filter_global = nh.advertise<nav_msgs::Odometry>("/vtol_msn/odom_filter_global", 1000);
+  pub_odom_filter_local = node->create_publisher<nav_msgs::msg::Odometry>("/vtol_msn/odom_filter_local", 100);//【不再处理姿态数据！只发布xyz！】
+  pub_odom_filter_global = node->create_publisher<nav_msgs::msg::Odometry>("/vtol_msn/odom_filter_global", 100);
 #endif
 
-  initializel_uwb(uwb_file);//先执行，以获得R_ecef_enu_
-  initializel_tag(tag_file);
+  initializel_uwb(uwb_params);//先执行，以获得R_ecef_enu_
+  initializel_tag(tag_params);
 
   std::thread initial_process{initialization_process};
   initial_process.detach();//异步、no阻塞

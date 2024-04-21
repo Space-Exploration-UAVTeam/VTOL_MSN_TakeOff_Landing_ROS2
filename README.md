@@ -17,11 +17,11 @@ AprilTag data from AprilTag_ros2 pkg, which got camera data from Airsim topic:
 ```
 /airsim_node/[DroneName]/bottom_cam/Scene
 ```
-Airsim dose not have a UWB sensor or a direct yaw topic, so we obtain these two from Airsim topic
+Airsim dose not have a UWB sensor or a direct yaw topic, so we fake these two type of data out of the odometry topic
 ```
 /airsim_node/[DroneName]/odom_local_ned
 ```
-Airsim dose not have a GNSS satellite number or anything related to the GNSS positioning quality, so we ignore the "/satellite" topic.  
+Airsim dose not have a GNSS satellite number or anything related to the GNSS positioning quality, so we ignore the "/satellite" topic and the corresponding logic in the code.  
 
 ## 2. Build 
 Clone the repository to your catkin workspace (for example `~/ros2_ws/`):

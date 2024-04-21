@@ -5,10 +5,10 @@ vtol_msn_takeoff_landing:
                      115.920891, 40.361924, 541.203,
                      115.920890, 40.361921, 541.203,
                      115.920886, 40.361924, 541.203]
-    gnss_cov: 0.015
-    reg_cov: 0.15
-    tag_cov: 0.015
+    gnss_observe_cov: 0.015
+    uwb_observe_cov: 0.15
+    tag_observe_cov: 0.015
     init_cov: 0.5
     omega_noise: 0.1
-    acc_noise: 0.4
-    gyro_noise: 0.2
+    vel_noise: 0.4
+    acc_noise: 0.2
