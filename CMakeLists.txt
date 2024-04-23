@@ -17,14 +17,22 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
-
-
-###########
+include_directories(include
+  ${EIGEN3_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  )
+########### 
 ## Build ##
 ###########
 add_executable(vtol_msn_takeoff_landing src/vtol_msn_takeoff_landing.cpp)
-ament_target_dependencies(vtol_msn_takeoff_landing rclcpp)
-
+ament_target_dependencies(vtol_msn_takeoff_landing PUBLIC
+ geometry_msgs
+ rclcpp
+ sensor_msgs
+ std_msgs
+ nav_msgs
+ apriltag_ros2_interfaces
+ )
 
 #############
 ## Install ##
@@ -36,4 +44,7 @@ install(TARGETS vtol_msn_takeoff_landing
 install(DIRECTORY launch 
   DESTINATION share/${PROJECT_NAME})
 
+install(DIRECTORY config 
+  DESTINATION share/${PROJECT_NAME})
+  
 ament_package()
