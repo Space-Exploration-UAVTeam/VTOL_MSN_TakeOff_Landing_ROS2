@@ -15,11 +15,20 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_auto REQUIRED)
-ament_auto_find_build_dependencies()
+find_package(rclcpp REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(apriltag_ros2_interfaces REQUIRED)
+
+
 include_directories(include
   ${EIGEN3_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
+  /opt/ros/humble/include/
   )
 ########### 
 ## Build ##
@@ -31,6 +40,7 @@ ament_target_dependencies(vtol_msn_takeoff_landing PUBLIC
  sensor_msgs
  std_msgs
  nav_msgs
+ tf2
  apriltag_ros2_interfaces
  )
 

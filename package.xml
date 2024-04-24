@@ -19,7 +19,7 @@
   <depend>std_msgs</depend>
   <depend>nav_msgs</depend>
   <!-- <depend>eigen_conversions</depend> -->
-  <depend>apriltag_ros2</depend>
+  <depend>tf2</depend>
   <depend>apriltag_ros2_interfaces</depend>
   <!--depend>nlink_parser_ros2 ??? </depend-->
 

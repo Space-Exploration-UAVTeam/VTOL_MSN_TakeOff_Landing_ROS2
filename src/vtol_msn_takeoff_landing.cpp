@@ -29,8 +29,7 @@ ROS2-Airsim version: Zhang Bihui @ 20240419
 // #include <message_filters/sync_policies/approximate_time.h>
 
 #include "rclcpp/rclcpp.hpp"
-// #include <std_msgs/msg/Float64.h>
-// #include <std_msgs/msg/UInt32.h>
+
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -38,10 +37,12 @@ ROS2-Airsim version: Zhang Bihui @ 20240419
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <tf2/LinearMath/Quaternion.h> // 四元数的定义
-#include <tf2/LinearMath/Matrix3x3.h>  // 
-#include <tf2/convert.h>               // 用于转换的函数
-// #include <visualization_msgs/Marker.h>
+// #include <tf2/LinearMath/Quaternion.h> // 四元数的定义
+// #include <tf2/LinearMath/Matrix3x3.h>  // 
+// #include <tf2/convert.h>               // 用于转换的函数
+#include <tf2/tf2/LinearMath/Quaternion.h> // 某些ROS2版本
+#include <tf2/tf2/LinearMath/Matrix3x3.h>  
+#include <tf2/tf2/convert.h> 
 
 #include "apriltag_ros2_interfaces/msg/april_tag_detection.hpp"
 #include "apriltag_ros2_interfaces/msg/april_tag_detection_array.hpp"
@@ -826,11 +827,11 @@ void gnss_gt_callback(const sensor_msgs::msg::NavSatFix& data)//
 }
 #endif
 
-void gnss_callback(const sensor_msgs::msg::NavSatFix::SharedPtr& data_gnss)//
+void gnss_callback(const sensor_msgs::msg::NavSatFix& data_gnss)//
 {
   std::cout<< "gnss_callback......" <<std::endl;
   Eigen::Vector3d blh;
-  blh << data_gnss->longitude, data_gnss->latitude, data_gnss->altitude;
+  blh << data_gnss.longitude, data_gnss.latitude, data_gnss.altitude;
   std::cout << std::setprecision(9) << blh <<std::endl;    
   Eigen::Vector3d pos_gnss_global = ecef_blh2xyz(blh);                   //ECEF三坐标
 
@@ -838,26 +839,17 @@ void gnss_callback(const sensor_msgs::msg::NavSatFix::SharedPtr& data_gnss)//
   buf_pos_gnss_global_.push_back(pos_gnss_global);
   mtx_gnss.unlock();
 
-  time_gnss_last_ = data_gnss->header.stamp.sec + data_gnss->header.stamp.nanosec * 1e-9;
-  // star_num_gnss_ = data_sat->num_satellites;
-  // std::cout<< star_num_gnss_ <<std::endl;    
+  time_gnss_last_ = data_gnss.header.stamp.sec + data_gnss.header.stamp.nanosec * 1e-9;
+  
 }
 
-void imu_callback(const sensor_msgs::msg::Imu::SharedPtr &imu_msg)
+void imu_callback(const sensor_msgs::msg::Imu::SharedPtr& imu_msg)
 {
   if(!transition_ready_)
   {
     return;//transition not ready, need no IMU data!
   }
   time_imu_last_ = imu_msg->header.stamp.sec + imu_msg->header.stamp.nanosec * 1e-9;
-
-  //for test
-  // imu_msg->angular_velocity.x = 0;
-  // imu_msg->angular_velocity.y = 0;
-  // imu_msg->angular_velocity.z = 0;
-  // imu_msg->linear_acceleration.x = 0;
-  // imu_msg->linear_acceleration.y = 0;
-  // imu_msg->linear_acceleration.z = 0;
 
   mtx_imu.lock();
   buf_imu_.push_back(imu_msg);
@@ -1358,7 +1350,7 @@ int main(int argc, char **argv)
   */
   //sensor_msgs/msg/NavSatFix, 基于WGS84的经纬[deg]高[m]，GVINS用的是ECEF坐标WGS84标准
   auto gnss_sub = node->create_subscription<sensor_msgs::msg::NavSatFix>("/airsim_node/Drone51/global_gps", 10, gnss_callback);//【？hz】
-  auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>("/airsim_node/Drone51/imu/imu", 200, imu_callback);//【？hz】
+  auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu::SharedPtr>("/airsim_node/Drone51/imu/imu", 200, imu_callback);//【？hz】
   auto tag_sub = node->create_subscription<apriltag_ros2_interfaces::msg::AprilTagDetectionArray>("/tag_detections", 10, tag_callback);//【？hz】
   auto compass_uwb_sub = node->create_subscription<nav_msgs::msg::Odometry>("/airsim_node/Drone51/odom_local_ned", 10, fake_compass_uwb_callback);//【？hz】   
 
