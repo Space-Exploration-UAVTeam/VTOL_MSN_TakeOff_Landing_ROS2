@@ -252,6 +252,7 @@ double time_tag_last_ = 0;
 double time_uwb_last_ = 0;
 
 sensor_msgs::msg::Imu::SharedPtr last_imu_;                    //IMU buffer末数据
+sensor_msgs::msg::Imu::SharedPtr temp_imu_;                    
 bool last_imu_flag_ = false;                           //whether there is a last_imu_ data
 std::deque<sensor_msgs::msg::Imu::SharedPtr> buf_imu_;       //data buffer for IMU
 
@@ -827,7 +828,7 @@ void gnss_gt_callback(const sensor_msgs::msg::NavSatFix& data)//
 }
 #endif
 
-void gnss_callback(const sensor_msgs::msg::NavSatFix& data_gnss)//
+void gnss_callback(const sensor_msgs::msg::NavSatFix & data_gnss)//
 {
   std::cout<< "gnss_callback......" <<std::endl;
   Eigen::Vector3d blh;
@@ -843,14 +844,26 @@ void gnss_callback(const sensor_msgs::msg::NavSatFix& data_gnss)//
   
 }
 
-void imu_callback(const sensor_msgs::msg::Imu::SharedPtr& imu_msg)
+// void imu_callback(const sensor_msgs::msg::Imu & imu_msg)
+// {
+//   if(!transition_ready_)
+//   {
+//     return;//transition not ready, need no IMU data!
+//   }
+//   time_imu_last_ = imu_msg.header.stamp.sec + imu_msg.header.stamp.nanosec * 1e-9;
+//   temp_imu_ = std::make_shared<sensor_msgs::msg::Imu>(imu_msg);
+//   mtx_imu.lock();
+//   buf_imu_.push_back(temp_imu_);
+//   mtx_imu.unlock();
+// }
+
+void imu_callback(const sensor_msgs::msg::Imu::SharedPtr imu_msg)
 {
   if(!transition_ready_)
   {
     return;//transition not ready, need no IMU data!
   }
   time_imu_last_ = imu_msg->header.stamp.sec + imu_msg->header.stamp.nanosec * 1e-9;
-
   mtx_imu.lock();
   buf_imu_.push_back(imu_msg);
   mtx_imu.unlock();
@@ -1338,7 +1351,7 @@ int main(int argc, char **argv)
   //   RCLCPP_ERROR(node->get_logger(), "Error parameters: %s", ex.what());
   //   return;
   // }
-
+  RCLCPP_INFO(node->get_logger(), "2222222222222222222222222222222222222");
   /*
   //sensor_msgs/msg/NavSatFix，又包含sensor_msgs/msg/NavSatStatus = Navigation Satellite fix status + Global Navigation Satellite System service type
   // status: 
@@ -1350,24 +1363,29 @@ int main(int argc, char **argv)
   */
   //sensor_msgs/msg/NavSatFix, 基于WGS84的经纬[deg]高[m]，GVINS用的是ECEF坐标WGS84标准
   auto gnss_sub = node->create_subscription<sensor_msgs::msg::NavSatFix>("/airsim_node/Drone51/global_gps", 10, gnss_callback);//【？hz】
-  auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu::SharedPtr>("/airsim_node/Drone51/imu/imu", 200, imu_callback);//【？hz】
+  RCLCPP_INFO(node->get_logger(), "3333333333333333333333333333333333333");
+  // auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>("/airsim_node/Drone51/imu/imu", 200, imu_callback);//【？hz】
+  auto imu_sub = node->create_subscription<sensor_msgs::msg::Imu>("/airsim_node/Drone51/imu/imu", 200, 
+                  [node](const sensor_msgs::msg::Imu::SharedPtr msg0) {imu_callback(msg0);});//The way to use SharedPtr in callback!!!!!!!!!!!【？hz】
+  RCLCPP_INFO(node->get_logger(), "4444444444444444444444444444444444444");
   auto tag_sub = node->create_subscription<apriltag_ros2_interfaces::msg::AprilTagDetectionArray>("/tag_detections", 10, tag_callback);//【？hz】
   auto compass_uwb_sub = node->create_subscription<nav_msgs::msg::Odometry>("/airsim_node/Drone51/odom_local_ned", 10, fake_compass_uwb_callback);//【？hz】   
 
-#ifdef OUTPUT_FOR_PLOTTING
-  std::string filename_gnss_gt = "/home/zbh/gt_data.dat"; 
-  const char* file_name_gnss_gt = filename_gnss_gt.c_str();
-  fp_gnss_gt = fopen(file_name_gnss_gt,"w");
-  std::string filename_sensor_pos = "/home/zbh/sensor_data.dat"; 
-  const char* file_name_sensor_pos = filename_sensor_pos.c_str();
-  fp_sensor_pos = fopen(file_name_sensor_pos,"w");
-  std::string filename_fusion_pos = "/home/zbh/fusion_data.dat"; 
-  const char* file_name_fusion_pos = filename_fusion_pos.c_str();
-  fp_fusion_pos = fopen(file_name_fusion_pos,"w");
-#else
+// #ifdef OUTPUT_FOR_PLOTTING
+//   std::string filename_gnss_gt = "/home/zbh/gt_data.dat"; 
+//   const char* file_name_gnss_gt = filename_gnss_gt.c_str();
+//   fp_gnss_gt = fopen(file_name_gnss_gt,"w");
+//   std::string filename_sensor_pos = "/home/zbh/sensor_data.dat"; 
+//   const char* file_name_sensor_pos = filename_sensor_pos.c_str();
+//   fp_sensor_pos = fopen(file_name_sensor_pos,"w");
+//   std::string filename_fusion_pos = "/home/zbh/fusion_data.dat"; 
+//   const char* file_name_fusion_pos = filename_fusion_pos.c_str();
+//   fp_fusion_pos = fopen(file_name_fusion_pos,"w");
+// #else
+
   pub_odom_filter_local__ = node->create_publisher<nav_msgs::msg::Odometry>("/vtol_msn/odom_filter_local_", 100);//【不再处理姿态数据！只发布xyz！】
   pub_odom_filter_global__ = node->create_publisher<nav_msgs::msg::Odometry>("/vtol_msn/odom_filter_global_", 100);
-#endif
+// #endif
 
   initializel_uwb(node, reference_uwb);//先执行，以获得R_ecef_enu_
   initializel_tag(node, reference_tags);
