@@ -809,11 +809,11 @@ void gnss_gt_callback(const sensor_msgs::msg::NavSatFix& data)//
 }
 #endif
 
-void gnss_callback(const sensor_msgs::msg::NavSatFix::SharedPtr& data_gnss)//
+void gnss_callback(const sensor_msgs::msg::NavSatFix& data_gnss)//
 {
   std::cout<< "gnss_callback......" <<std::endl;
   Eigen::Vector3d blh;
-  blh << data_gnss->longitude, data_gnss->latitude, data_gnss->altitude;
+  blh << data_gnss.longitude, data_gnss.latitude, data_gnss.altitude;
   std::cout << std::setprecision(9) << blh <<std::endl;    
   Eigen::Vector3d pos_gnss_global = ecef_blh2xyz(blh);                   //ECEF三坐标
 
@@ -821,7 +821,7 @@ void gnss_callback(const sensor_msgs::msg::NavSatFix::SharedPtr& data_gnss)//
   buf_pos_gnss_global_.push_back(pos_gnss_global);
   mtx_gnss.unlock();
 
-  time_gnss_last_ = data_gnss->header.stamp.sec + data_gnss->header.stamp.nanosec * 1e-9;
+  time_gnss_last_ = data_gnss.header.stamp.sec + data_gnss.header.stamp.nanosec * 1e-9;
   // star_num_gnss_ = data_sat->num_satellites;
   // std::cout<< star_num_gnss_ <<std::endl;    
 }
