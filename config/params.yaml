@@ -1,11 +1,12 @@
 vtol_msn_takeoff_landing:
   ros__parameters:
-    reference_uwb: [-122.140165, 47.641468, 122, 90]
+    reference_uwb: [-122.140165, 47.641468, 122, 0]
     reference_tags: [-122.140165, 47.641468, 102, 0, -1.2, 2, 2, 1.2, -1.2, -1.2, 150, 433]
     gnss_observe_cov: 0.015
     uwb_observe_cov: 0.15
     tag_observe_cov: 0.015
     compass_observe_cov: 0.015
+    super_observe_cov: 0.015
     init_cov: 0.5
     omega_noise: 0.1
     vel_noise: 0.4

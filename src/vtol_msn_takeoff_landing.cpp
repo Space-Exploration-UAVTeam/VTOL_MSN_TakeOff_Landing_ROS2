@@ -33,6 +33,13 @@ ROS2-Airsim version: Zhang Bihui @ 20240419
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <geometry_msgs/msg/quaternion_stamped.hpp>
+
+#include <message_filters/subscriber.h>
+#include <message_filters/time_synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <functional>
+
 #include <tf2/LinearMath/Quaternion.h> // 四元数的定义
 #include <tf2/LinearMath/Matrix3x3.h>  // 
 #include <tf2/convert.h>               // 用于转换的函数
@@ -229,6 +236,7 @@ double GNSS_OBSERVE_COV;  //观测方程噪声，收敛后传感器的逆权重
 double COMPASS_OBSERVE_COV;
 double TAG_OBSERVE_COV;
 double UWB_OBSERVE_COV;
+double SUPER_OBSERVE_COV;
 std::vector<double> reference_uwb; // for GNSS error modification in [airsim]
 
 StatesGroup state_;                                         //fliter local 变量
@@ -286,7 +294,7 @@ double yaw_transition_enu_;                            //用于计算filter loca
 Eigen::Matrix3d R_ecef_local_transition_;              //       filter local到global的rotation
 
 Eigen::Vector3d anchor_super_xyz_;                     //用于计算super local到global的转换, subscribe from topic
-Eigen::Matrix3d R_ecef_local_super_;                   //
+Eigen::Matrix3d R_ecef_camera_super_;                   //
 
 Eigen::Matrix3d R_ecef_enu_;                           //rotation from ENU to ECEF, 从uwb经纬度计算得到
 double cost_time_;
@@ -308,7 +316,7 @@ std::mutex mtx_gnss, mtx_imu, mtx_uwb, mtx_tag, mtx_compass, mtx_super;
 bool transition_ready_ = false;
 bool tagbase_ready_ = false;
 bool uwbbase_ready_ = false;
-bool superbase_ready_ = false;
+// bool superbase_ready_ = false;
 
 int filter_flag_ = 0;
 int filter_count_ = 0;
@@ -458,31 +466,57 @@ Eigen::Vector3d ecef_blh2xyz(Eigen::Vector3d& BLH)//wgs84标准下经Breite纬La
   double e2 = (a*a - b*b) / (a*a);//第一偏心率
   // std::cout<<"e2:" << e2 <<std::endl;
   // double NN =  1 - e2 * sin(BLH(0) * D2R) * sin(BLH(0) * D2R);
-  double N = a / sqrt(1 - e2 * sin(BLH(0) * D2R) * sin(BLH(0) * D2R));
+  double N = a / sqrt(1 - e2 * sin(BLH(1) * D2R) * sin(BLH(1) * D2R));
   // std::cout<<"N:" << N <<std::endl;
-  double WGS84_X = (N + BLH(2)) * cos(BLH(0) * D2R) * cos(BLH(1) * D2R);
-  double WGS84_Y = (N + BLH(2)) * cos(BLH(0) * D2R) * sin(BLH(1) * D2R);
-  double WGS84_Z = (N * (1 - e2) + BLH(2)) * sin(BLH(0) * D2R);
+  double WGS84_X = (N + BLH(2)) * cos(BLH(1) * D2R) * cos(BLH(0) * D2R);
+  double WGS84_Y = (N + BLH(2)) * cos(BLH(1) * D2R) * sin(BLH(0) * D2R);
+  double WGS84_Z = (N * (1 - e2) + BLH(2)) * sin(BLH(1) * D2R);
   Eigen::Vector3d xyz;
   xyz << WGS84_X, WGS84_Y, WGS84_Z;
   return xyz;
 }
 
-Eigen::Vector3d ecef_xyz2blh(Eigen::Vector3d& xyz)//wgs84标准下xyz转经Breite纬Lange高Hohe  https://zhidao.baidu.com/question/429795836325466052.html
+// Eigen::Vector3d ecef_xyz2blh(Eigen::Vector3d& xyz)//wgs84标准下xyz转经Breite纬Lange高Hohe  https://zhidao.baidu.com/question/429795836325466052.html
+// {
+//   double a = 6378137;
+//   double f = 1/298.257223563;
+//   double b = a * (1 - f);//短半轴
+//   double e2 = (a * a - b * b) / (a*a);//第一偏心率
+//   double eq2 = (a * a - b * b) / (b*b);//
+//   double theta = atan((xyz(2)*a) / (sqrt(xyz(0)*xyz(0)+xyz(1)*xyz(1))*b));
+//   double WGS84_L = R2D * atan(xyz(1) / xyz(0));
+//   double WGS84_B = R2D * atan((xyz(2) +  eq2*b*sin(theta)*sin(theta)*sin(theta)) / (sqrt(xyz(0)*xyz(0)+xyz(1)*xyz(1)) - e2*a*cos(theta)*cos(theta)*cos(theta)));
+//   double N = a / sqrt(1 - e2 * sin(WGS84_B * D2R) * sin(WGS84_B * D2R));
+//   // std::cout<<"N:" << N <<std::endl;
+//   double WGS84_H = (sqrt(xyz(0)*xyz(0)+xyz(1)*xyz(1))/cos(WGS84_B*D2R)) - N;
+//   Eigen::Vector3d blh;
+//   blh << (180 - WGS84_B), WGS84_L, WGS84_H;//修正到东半球！！！
+//   return blh;
+// }
+
+Eigen::Vector3d ecef_xyz2blh(Eigen::Vector3d& xyz)//wgs84标准下xyz转经Breite纬Lange高Hohe  https://ww2.mathworks.cn/help/aeroblks/ecefpositiontolla.html
 {
   double a = 6378137;
   double f = 1/298.257223563;
   double b = a * (1 - f);//短半轴
   double e2 = (a * a - b * b) / (a*a);//第一偏心率
-  double eq2 = (a * a - b * b) / (b*b);//
-  double theta = atan((xyz(2)*a) / (sqrt(xyz(0)*xyz(0)+xyz(1)*xyz(1))*b));
-  double WGS84_L = R2D * atan(xyz(1) / xyz(0));
-  double WGS84_B = R2D * atan((xyz(2) +  eq2*b*sin(theta)*sin(theta)*sin(theta)) / (sqrt(xyz(0)*xyz(0)+xyz(1)*xyz(1)) - e2*a*cos(theta)*cos(theta)*cos(theta)));
-  double N = a / sqrt(1 - e2 * sin(WGS84_B * D2R) * sin(WGS84_B * D2R));
-  // std::cout<<"N:" << N <<std::endl;
-  double WGS84_H = (sqrt(xyz(0)*xyz(0)+xyz(1)*xyz(1))/cos(WGS84_B*D2R)) - N;
+
+  double Lon = atan(xyz(1) / xyz(0));
+  double s = sqrt(xyz(0)*xyz(0)+xyz(1)*xyz(1));
+  double reduced_lat = atan(xyz(2) / ((1-f)*s));
+  double geodetic_lat = atan((xyz(2)+e2*(1-f)/(1-e2)*a*sin(reduced_lat)*sin(reduced_lat)*sin(reduced_lat)) / (s-e2*a*cos(reduced_lat)*cos(reduced_lat)*cos(reduced_lat)));
+  std::cout << "geodetic_lat_1 =" << geodetic_lat << std::endl;
+  reduced_lat = atan((1-f)*sin(geodetic_lat) / cos(geodetic_lat));
+  geodetic_lat = atan((xyz(2)+e2*(1-f)/(1-e2)*a*sin(reduced_lat)*sin(reduced_lat)*sin(reduced_lat)) / (s-e2*a*cos(reduced_lat)*cos(reduced_lat)*cos(reduced_lat)));
+  std::cout << "geodetic_lat_2 =" << geodetic_lat << std::endl;
+  reduced_lat = atan((1-f)*sin(geodetic_lat) / cos(geodetic_lat));
+  geodetic_lat = atan((xyz(2)+e2*(1-f)/(1-e2)*a*sin(reduced_lat)*sin(reduced_lat)*sin(reduced_lat)) / (s-e2*a*cos(reduced_lat)*cos(reduced_lat)*cos(reduced_lat)));
+  std::cout << "geodetic_lat_3 =" << geodetic_lat << std::endl;
+  double N = a/sqrt(1-e2*sin(geodetic_lat)*sin(geodetic_lat));
+  double altitude = s*cos(geodetic_lat) + (xyz(2)+e2*N*sin(geodetic_lat))*sin(geodetic_lat) - N;
+
   Eigen::Vector3d blh;
-  blh << (180 - WGS84_B), WGS84_L, WGS84_H;//修正到东半球！！！
+  blh << Lon*R2D - 180, geodetic_lat*R2D, altitude;//修正到West半球！！！
   return blh;
 }
 
@@ -503,12 +537,15 @@ void initializel_uwb(rclcpp::Node::SharedPtr node, const std::vector<double> ref
   std::cout<<std::endl<<"uwb' yaw in degree = " <<yaw_uwb_enu;
 
   //anchor确定了ENU坐标和ECEF坐标的转换关系
-  double lat = anchor_uwb_blh_.x()*D2R, lon = anchor_uwb_blh_.y()*D2R;//经纬
+  double lon = anchor_uwb_blh_.x()*D2R, lat = anchor_uwb_blh_.y()*D2R;//经纬
   double sin_lat = sin(lat), cos_lat = cos(lat);
   double sin_lon = sin(lon), cos_lon = cos(lon);
   R_ecef_enu_ << -sin_lon, -sin_lat*cos_lon, cos_lat*cos_lon,
                   cos_lon, -sin_lat*sin_lon, cos_lat*sin_lon,
                   0      ,  cos_lat        , sin_lat;
+  // R_ecef_enu_ <<  -sin_lat,         -cos_lat,            0, 
+  //         -sin_lon*cos_lat, -sin_lon*sin_lat,      cos_lon,
+  //          cos_lon*cos_lat,  cos_lon*sin_lat,      sin_lon;//https://blog.51cto.com/u_16213568/8484305
   double sin_yaw_diff = std::sin(yaw_uwb_enu*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!
   double cos_yaw_diff = std::cos(yaw_uwb_enu*D2R);
   Eigen::Matrix3d R_enu_local;
@@ -583,15 +620,17 @@ void filter_global2local(const Eigen::Vector3d& pos_global, const Eigen::Matrix3
   Eigen::Matrix3d rot_local;
   rot_local = R_ecef_local_transition_.inverse() * rot_global;
   // std::cout<<std::endl<<"======== rot_global ========"<<std::endl<< rot_global <<std::endl;  
-  std::cout<<std::endl<<"======== measurement ========"<<std::endl<< rot_local <<std::endl<< pos_local <<std::endl;  
-  // Eigen::Matrix3d rot_diff =  rot_local.inverse()*g_state.rot_end;
+  // std::cout<<std::endl<<"======== measurement ========"<<std::endl<< rot_local <<std::endl<< pos_local <<std::endl;  
+  Eigen::Matrix3d rot_diff =  g_state.rot_end.inverse()*rot_local;
   // std::cout<<std::endl<<"======== rot_diff ========"<<std::endl<< rot_diff <<std::endl;  
   state.head<3>() = SO3_LOG(g_state.rot_end.inverse()*rot_local);//姿态在先！！！！！！！！！！！！！！！！
   state.tail<3>() = pos_local - g_state.pos_end;
+
   if(isIdentity(rot_global))//观测量只有pos没有rot的情况
   {
     state.head<3>() << 0,0,0;
     std::cout<<"ONLY position" <<std::endl;    
+  }
 
 #ifdef OUTPUT_FOR_PLOTTING
   std::string bufferfile = std::to_string(state_.last_update_time) + "," + std::to_string(pos_local(0))+ "," 
@@ -601,16 +640,13 @@ void filter_global2local(const Eigen::Vector3d& pos_global, const Eigen::Matrix3
   fwrite(buffer_file, 1, 50, fp_sensor_pos);
 #endif
 
-
-  }
   double pp = sqrt(pos_global(0)*pos_global(0) + pos_global(1)*pos_global(1) + pos_global(2)*pos_global(2));
   if(pp < 1e-7)////观测量只有rot没有pos的情况
   {
     state.tail<3>() << 0,0,0;
     std::cout<<"ONLY rotation" <<std::endl;    
   }
-  // std::cout<<"========  g_state   ========"<<std::endl<< g_state <<std::endl;    
-  // std::cout<<"======== meas_vec = measurement-g_state ========"<<std::endl<< state <<std::endl;    
+  // std::cout<<"======== meas_vec = measurement - g_state ========"<<std::endl<< state <<std::endl;    
 }
 
 //IErKF局部坐标系state（pos+rot_mat），转到全局pos+rot
@@ -699,7 +735,7 @@ void fake_compass_uwb_callback(const nav_msgs::msg::Odometry& odom)
   Eigen::Vector3d pos_uwb_local, pos_uwb_global;
   //[airsim] UWB坐标取值来自odom_local_ned，UWB局部坐标系为ENU，所以X_uwb = Y_ned, Y_uwb = X_ned, Z_uwb = -Z_ned， UWB外参为零。   
   pos_uwb_local << odom.pose.pose.position.y, odom.pose.pose.position.x, -odom.pose.pose.position.z;
-  if(sqrt(pos_uwb_local(0)*pos_uwb_local(0) + pos_uwb_local(1)*pos_uwb_local(1) + pos_uwb_local(2)*pos_uwb_local(2)) > 50)
+  if(sqrt(pos_uwb_local(0)*pos_uwb_local(0) + pos_uwb_local(1)*pos_uwb_local(1) + pos_uwb_local(2)*pos_uwb_local(2)) > 75)
   {
     printf("///////////////pos_uwb out of range///////////////\n");      
     return;
@@ -735,55 +771,113 @@ void fake_compass_uwb_callback(const nav_msgs::msg::Odometry& odom)
   time_compass_last_ = time_uwb_last_;
 }
 
-void super_ref_callback(const std_msgs::msg::Float64MultiArray& ref) // it is better to conbine super_ref with super_pose into one msg...
+void sync_callback(const geometry_msgs::msg::QuaternionStamped& ref, const geometry_msgs::msg::PoseStamped& super_pose)
 {
-  anchor_super_xyz_ << ref.data[0], ref.data[1], ref.data[2];
+  std::cout<< "super_pose_callback......" <<std::endl;
+
+  anchor_super_xyz_ << ref.quaternion.x, ref.quaternion.y, ref.quaternion.z;
 
   //anchor确定了ENU坐标和ECEF坐标的转换关系，R_ecef_enu_ 近似使用uwb计算得到的
-  double sin_yaw_diff = std::sin(ref.data[3]*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!!!!!!!!!!!!!!!!!!!!!!!!
-  double cos_yaw_diff = std::cos(ref.data[3]*D2R);
+  double sin_yaw_diff = std::sin(ref.quaternion.w*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!!!!!!!!!!!!!!!!!!!!!!!!
+  double cos_yaw_diff = std::cos(ref.quaternion.w*D2R);
   Eigen::Matrix3d R_enu_local;
   R_enu_local << cos_yaw_diff, -sin_yaw_diff, 0,
                  sin_yaw_diff,  cos_yaw_diff, 0,
                  0           ,  0           , 1;
-  R_ecef_local_super_ = R_ecef_enu_ * R_enu_local;
-  if(superbase_ready_ == false) superbase_ready_ = true;
-}
-void super_pose_callback(const geometry_msgs::msg::PoseStamped& pose) //
-{
-  std::cout<< "super_pose_callback......" <<std::endl;
+  Eigen::Matrix3d R_local_camera;
+  R_local_camera << 0, -1,  0,
+                   -1,  0,  0,
+                    0,  0, -1;                 
+  R_ecef_camera_super_ = R_ecef_enu_ * R_enu_local * R_local_camera;
 
-  Eigen::Vector3d pos_super_local;//
-  Eigen::Matrix3d rot_super_local;
 
-  tf2::Quaternion tf2_quat(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);  // tf2中的四元数类型
-  tf2::Matrix3x3 rot_super_local(tf2_quat);  // 从四元数生成旋转矩阵
+  Eigen::Vector3d pos_super_camera;//
+  Eigen::Quaterniond quaternion(super_pose.pose.orientation.w, super_pose.pose.orientation.x, super_pose.pose.orientation.y, super_pose.pose.orientation.z);  // wxyz
+  Eigen::Matrix3d rot_super_camera = quaternion.toRotationMatrix(); // 从四元数生成旋转矩阵
 
-  pos_super_local << pose.position.x, pose.position.y, pose.position.z;
-  printf("pos_super_local  ======== %lf %lf %lf \n", pos_super_local(0), pos_super_local(1), pos_super_local(2));
-  double sy = sqrt(rot_super_local(0,0)*rot_super_local(0,0) + rot_super_local(1,0)*rot_super_local(1,0));
-  double roll_tag = atan2(rot_super_local(2, 1), rot_super_local(2, 2)) * R2D;
-  double pitch_tag = atan2(-rot_super_local(2, 0), sy) * R2D;
-  double yaw_tag = atan2(rot_super_local(1, 0), rot_super_local(0, 0)) * R2D; 
-  printf("rot_super_local eular angles ======== %lf %lf %lf \n", roll_tag, pitch_tag, yaw_tag);
+  pos_super_camera << super_pose.pose.position.x, super_pose.pose.position.y, super_pose.pose.position.z;
+  // printf("pos_super_camera  ======== %lf %lf %lf \n", pos_super_camera(0), pos_super_camera(1), pos_super_camera(2));
+  double sy = sqrt(rot_super_camera(0,0)*rot_super_camera(0,0) + rot_super_camera(1,0)*rot_super_camera(1,0));
+  double roll_pose = atan2(rot_super_camera(2, 1), rot_super_camera(2, 2)) * R2D;
+  double pitch_pose = atan2(-rot_super_camera(2, 0), sy) * R2D;
+  double yaw_pose = atan2(rot_super_camera(1, 0), rot_super_camera(0, 0)) * R2D; 
+  // printf("rot_super_camera eular angles ======== %lf %lf %lf \n", roll_pose, pitch_pose, yaw_pose);
 
-  if(superbase_ready_ == false)
-  {
-    RCLCPP_INFO(node->get_logger(), "superbase not ready, give up super_pose!!");
-    return;
-  }
-  Eigen::Vector3d pos_super_global = R_ecef_local_super_ * pos_super_local + anchor_super_xyz_;
-  Eigen::Matrix3d rot_super_global = R_ecef_local_super_ * rot_super_local;
-  // std::cout<<std::endl<<"rot_super_global ========"<<std::endl<< rot_super_global <<std::endl;  
+  Eigen::Vector3d pos_super_global = R_ecef_camera_super_ * pos_super_camera + anchor_super_xyz_;
+  Eigen::Matrix3d R_camera_body;
+  R_camera_body << 0, -1,  0,
+                   -1,  0,  0,
+                    0,  0, -1;   
+  Eigen::Matrix3d rot_super_global = R_ecef_camera_super_ * rot_super_camera * R_camera_body;  // we need body attitude, not camera attitude!!!
+  std::cout<<std::endl<<"pos_super_global ========"<<std::endl<< pos_super_global <<std::endl;  
   // std::cout<<std::endl<<"rot_super_global ========"<<std::endl<< rot_super_global <<std::endl;  
 
-  time_tag_last_ = tags.header.stamp.sec + tags.header.stamp.nanosec * 1e-9;
+  time_super_last_ = super_pose.header.stamp.sec + super_pose.header.stamp.nanosec * 1e-9;
 
   mtx_super.lock();
   buf_pos_super_global_.push_back(pos_super_global);
   buf_rot_super_global_.push_back(rot_super_global);
-  mtx_super.unlock();
+  mtx_super.unlock();  
 }
+
+// void super_ref_callback(const std_msgs::msg::Float64MultiArray& ref) // it is better to conbine super_ref with super_pose into one msg...
+// {
+//   std::cout<< "super_ref_callback......" <<std::endl;
+//   anchor_super_xyz_ << ref.data.at(0), ref.data.at(1), ref.data.at(2);
+//   // std::cout << ref.data.at(0) << "..." << ref.data.at(1) << "..." << ref.data.at(2) << "..." << ref.data.at(3) << std::endl;
+
+//   //anchor确定了ENU坐标和ECEF坐标的转换关系，R_ecef_enu_ 近似使用uwb计算得到的
+//   double sin_yaw_diff = std::sin(ref.data.at(3)*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!!!!!!!!!!!!!!!!!!!!!!!!
+//   double cos_yaw_diff = std::cos(ref.data.at(3)*D2R);
+//   Eigen::Matrix3d R_enu_local;
+//   R_enu_local << cos_yaw_diff, -sin_yaw_diff, 0,
+//                  sin_yaw_diff,  cos_yaw_diff, 0,
+//                  0           ,  0           , 1;
+//   Eigen::Matrix3d R_local_camera;
+//   R_local_camera << 0, -1,  0,
+//                    -1,  0,  0,
+//                     0,  0, -1;                 
+//   R_ecef_camera_super_ = R_ecef_enu_ * R_enu_local * R_local_camera;
+//   if(superbase_ready_ == false) superbase_ready_ = true;
+// }
+// void super_pose_callback(const geometry_msgs::msg::PoseStamped& super_pose) //
+// {
+//   std::cout<< "super_pose_callback......" <<std::endl;
+
+//   Eigen::Vector3d pos_super_camera;//
+
+//   Eigen::Quaterniond quaternion(super_pose.pose.orientation.w, super_pose.pose.orientation.x, super_pose.pose.orientation.y, super_pose.pose.orientation.z);  // wxyz
+//   Eigen::Matrix3d rot_super_camera = quaternion.toRotationMatrix(); // 从四元数生成旋转矩阵
+
+//   pos_super_camera << super_pose.pose.position.x, super_pose.pose.position.y, super_pose.pose.position.z;
+//   // printf("pos_super_camera  ======== %lf %lf %lf \n", pos_super_camera(0), pos_super_camera(1), pos_super_camera(2));
+//   double sy = sqrt(rot_super_camera(0,0)*rot_super_camera(0,0) + rot_super_camera(1,0)*rot_super_camera(1,0));
+//   double roll_pose = atan2(rot_super_camera(2, 1), rot_super_camera(2, 2)) * R2D;
+//   double pitch_pose = atan2(-rot_super_camera(2, 0), sy) * R2D;
+//   double yaw_pose = atan2(rot_super_camera(1, 0), rot_super_camera(0, 0)) * R2D; 
+//   // printf("rot_super_camera eular angles ======== %lf %lf %lf \n", roll_pose, pitch_pose, yaw_pose);
+
+//   if(superbase_ready_ == false)
+//   {
+//     std::cout<< "superbase not ready, give up super_pose!!" <<std::endl;
+//     return;
+//   }
+//   Eigen::Vector3d pos_super_global = R_ecef_camera_super_ * pos_super_camera + anchor_super_xyz_;
+//   Eigen::Matrix3d R_camera_body;
+//   R_camera_body << 0, -1,  0,
+//                    -1,  0,  0,
+//                     0,  0, -1;   
+//   Eigen::Matrix3d rot_super_global = R_ecef_camera_super_ * rot_super_camera * R_camera_body;  // we need body attitude, not camera attitude!!!
+//   std::cout<<std::endl<<"pos_super_global ========"<<std::endl<< pos_super_global <<std::endl;  
+//   // std::cout<<std::endl<<"rot_super_global ========"<<std::endl<< rot_super_global <<std::endl;  
+
+//   time_super_last_ = super_pose.header.stamp.sec + super_pose.header.stamp.nanosec * 1e-9;
+
+//   mtx_super.lock();
+//   buf_pos_super_global_.push_back(pos_super_global);
+//   buf_rot_super_global_.push_back(rot_super_global);
+//   mtx_super.unlock();
+// }
 
 void tag_callback(const apriltag_ros2_interfaces::msg::AprilTagDetectionArray& tags) //
 {
@@ -964,6 +1058,7 @@ void filtering_process(rclcpp::Node::SharedPtr node)
     // double imu_time = imu_end - imu_start;
     // std::cout<<"========IMU processing time cost========  "<< imu_time <<std::endl;    
     // std::cout<<"======== state_.cov ========"<<std::endl<< state_.cov <<std::endl;    
+    filter_flag_ = 0;
 
     if(!buf_pos_gnss_global_.empty() && star_num_gnss_ >= threshold_gnss_star_ && mtx_gnss.try_lock())//gnss buffer没被占用 && 有新的gnss观测 && 搜星数>阈值
     {
@@ -1021,6 +1116,7 @@ void filtering_process(rclcpp::Node::SharedPtr node)
       filter_flag_ += 1;
       // std::cout<<"======== state_ after gnss filter ========"<<std::endl<< state_.rot_end <<std::endl<< state_.pos_end <<std::endl<< state_.vel_end <<std::endl;    
     }
+
 
     if(!buf_rot_compass_global_.empty() && mtx_compass.try_lock())//compass buffer没被占用 && 有新的compass观测
     {
@@ -1080,6 +1176,7 @@ void filtering_process(rclcpp::Node::SharedPtr node)
       // std::cout<<"======== state_ after compass filter ========"<<std::endl<< state_.rot_end <<std::endl<< state_.pos_end <<std::endl<< state_.vel_end <<std::endl;    
     }
 
+
     if(!buf_pos_tag_global_.empty() && mtx_tag.try_lock())//tag buffer没被占用 && 有新的tag观测
     {
       RCLCPP_INFO(node->get_logger(), "!!!!!!!!NEW Tag!!!!!!!!");
@@ -1097,11 +1194,11 @@ void filtering_process(rclcpp::Node::SharedPtr node)
       // std::cout<<"======== state_ before new tag ========"<<std::endl<< state_.rot_end <<std::endl<< state_.pos_end <<std::endl<< state_.vel_end <<std::endl;    
       // std::cout<<"========  meas_vec  ========"<<std::endl<< meas_vec <<std::endl;  
       // std::cout<<"======== state_.cov ========"<<std::endl<< state_.cov <<std::endl;      
-      double latency = node->get_clock()->now().nanoseconds()*1e-9 - time_tag_last_;//<s>
-      if(latency > 0.1)//trigger the Out Of Sequenence Measurement method
-      {
-        RCLCPP_INFO(node->get_logger(), "!!!!!!!! OOSM !!!!!!!!");
-      }
+      // double latency = node->get_clock()->now().nanoseconds()*1e-9 - time_tag_last_;//<s>
+      // if(latency > 0.1)//trigger the Out Of Sequenence Measurement method
+      // {
+      //   RCLCPP_INFO(node->get_logger(), "!!!!!!!! OOSM !!!!!!!!");
+      // }
       // Eigen::Matrix< double, DIM_OF_STATES, 1 > d_state;//[9x1]
       d_state.setZero();      // 误差状态反馈到系统状态后,将误差状态清零
       Eigen::MatrixXd Hsub(6,9);
@@ -1147,6 +1244,7 @@ void filtering_process(rclcpp::Node::SharedPtr node)
       filter_flag_ += 4;
       // std::cout<<"======== state_ after tag filter ========"<<std::endl<< state_.rot_end <<std::endl<< state_.pos_end <<std::endl<< state_.vel_end <<std::endl;    
     }
+
 
     if(!buf_pos_uwb_global_.empty() && mtx_uwb.try_lock())//uwb buffer没被占用 && 有新的uwb观测
     {
@@ -1207,14 +1305,83 @@ void filtering_process(rclcpp::Node::SharedPtr node)
     }
 
 
-    filter_local2global(state_, pos_filter_global_, rot_filter_global_);
+    if(!buf_pos_super_global_.empty() && mtx_super.try_lock())//
+    {
+      RCLCPP_INFO(node->get_logger(), "!!!!!!!!NEW Super_pose!!!!!!!!");
+      /***Measuremnt Jacobian matrix H and measurents vector ***/
+      state_.last_update_time = time_super_last_;
+      Eigen::VectorXd meas_vec(6);
+      Eigen::Vector3d pos_super_global = buf_pos_super_global_.front();
+      Eigen::Matrix3d rot_super_global = buf_rot_super_global_.front();
+      // std::cout<<std::endl<<"rot_super_global ========"<<std::endl<< rot_super_global <<std::endl;  
+      filter_global2local(pos_super_global, rot_super_global, state_, meas_vec);//meas_vec =（观测量-状态变量predict）转换到局部坐标系的差值，姿态三个自由度 + pos三个自由度
+      buf_pos_super_global_.clear();
+      buf_rot_super_global_.clear();
+      mtx_super.unlock(); // 释放读锁
 
-    double sx = sqrt(state_.rot_end(0,0)*state_.rot_end(0,0) + state_.rot_end(1,0)*state_.rot_end(1,0));//rot_filter_global_.at<double>(0,0)
-    double roll_filter = atan2(state_.rot_end(2, 1), state_.rot_end(2, 2)) * R2D;
-    double pitch_filter = atan2(-state_.rot_end(2, 0), sx) * R2D;
-    double yaw_filter = atan2(state_.rot_end(1, 0), state_.rot_end(0, 0)) * R2D; 
-    printf("filter local poses ======================================================== %lf %lf %lf \n", state_.pos_end(0), state_.pos_end(1), state_.pos_end(2));
-    printf("filter local eular angles ================================================= %lf %lf %lf \n", roll_filter, pitch_filter, yaw_filter);
+      // std::cout<<"======== state_ before new super_pose ========"<<std::endl<< state_.rot_end <<std::endl<< state_.pos_end <<std::endl<< state_.vel_end <<std::endl;    
+      // std::cout<<"========  meas_vec  ========"<<std::endl<< meas_vec <<std::endl;  
+      // std::cout<<"======== state_.cov ========"<<std::endl<< state_.cov <<std::endl;      
+      double latency = node->get_clock()->now().nanoseconds()*1e-9 - time_super_last_;//<s>
+      if(latency > 0.1)//trigger the Out Of Sequenence Measurement method
+      {
+        RCLCPP_INFO(node->get_logger(), "!!!!!!!! OOSM !!!!!!!!");
+      }
+      // Eigen::Matrix< double, DIM_OF_STATES, 1 > d_state;//[9x1]
+      d_state.setZero();      // 误差状态反馈到系统状态后,将误差状态清零
+      Eigen::MatrixXd Hsub(6,9);
+      Hsub.setZero();
+      //6维观测（姿态的观测与姿态的状态变量都是3维李代数），姿态观测rho对状态变量rho的Jacobian是1，pos观测yxz对pos_end的Jacobian是1，观测对状态变量vel_end的Jacobian是0。
+      Hsub  <<  1,0,0,0,0,0,0,0,0,
+                0,1,0,0,0,0,0,0,0,
+                0,0,1,0,0,0,0,0,0,
+                0,0,0,1,0,0,0,0,0,
+                0,0,0,0,1,0,0,0,0,
+                0,0,0,0,0,1,0,0,0;     
+      // construct measurement noise matrix
+      Eigen::MatrixXd R_super(6,6);
+      // R_gnss = gnssdata.std.cwiseProduct(gnssdata.std).asDiagonal();
+      R_super<< SUPER_OBSERVE_COV,0,0,0,0,0,
+                0,SUPER_OBSERVE_COV,0,0,0,0,
+                0,0,SUPER_OBSERVE_COV,0,0,0,
+                0,0,0,SUPER_OBSERVE_COV,0,0,
+                0,0,0,0,SUPER_OBSERVE_COV,0,
+                0,0,0,0,0,SUPER_OBSERVE_COV; 
+
+      /*** Error State Kalman Filter Update ***/
+      auto temp         = Hsub * state_.cov * Hsub.transpose() + R_super;//[6x6]=[6x9]*[9x9]*[9x6]+[6x6]
+      Eigen::MatrixXd K = state_.cov * Hsub.transpose() * temp.inverse();//[9x6]=[9x9]*[9x6]*[6x6]
+
+      // std::cout<<"========  temp  ========"<<std::endl<< temp <<std::endl;    
+      // std::cout<<"========  K  ========"<<std::endl<< K <<std::endl;    
+      //【Jacobian(Hsub)、g_state_.cov、K、solution都是so3相关变量】
+      // ESKF(ErKF)：meas_vec是观测量差值，d_state_是状态变量差值，ESKF小册子给的是状态变量和观测量nominal值，但是残差值更合理，武大KF-GINS也是残差值
+      // 如果每次观测量更新后都进行误差状态反馈，则Imu_Process不会影响d_state，它的值直到下一次观测量更新之前都是0，下式可以简化为：d_state = K * meas_vec
+      d_state = K * meas_vec - K * Hsub * d_state;//[9x1] = [9x6]*[6x1]-[9x6]*[6x9]*[9x1]
+      // std::cout<<"========d_state========"<<std::endl<< d_state <<std::endl;    
+      // Eigen::Matrix3d rot_temp = SO3_Exp(d_state(0), d_state(1), d_state(2));
+      // std::cout<<"========rot_temp========"<<std::endl<< rot_temp <<std::endl; 
+      // std::cout<<"========d_state========"<<std::endl<< d_state <<std::endl;    
+      state_ = state_ + d_state;//【SO3+so3=SO3】
+
+      /*** Covariance Update ***/
+      I_KH = I_STATE - K * Hsub;//[9x9] = [9x9]-[9x6]*[6x9]
+      state_.cov = I_KH * state_.cov * I_KH.transpose() + K * R_super * K.transpose();//[9x9] = [9x9]*[9x9]*[9x9] + [9x6]*[6x6]*[6x9]
+      // std::cout<<"======== state_.cov ========"<<std::endl<< state_.cov <<std::endl;    
+
+      filter_flag_ += 16;
+      // std::cout<<"======== state_ after super_pose ========"<<std::endl<< state_.rot_end <<std::endl<< state_.pos_end <<std::endl<< state_.vel_end <<std::endl;    
+    }
+
+  filter_local2global(state_, pos_filter_global_, rot_filter_global_);
+
+  double sx = sqrt(state_.rot_end(0,0)*state_.rot_end(0,0) + state_.rot_end(1,0)*state_.rot_end(1,0));//rot_filter_global_.at<double>(0,0)
+  double roll_filter = atan2(state_.rot_end(2, 1), state_.rot_end(2, 2)) * R2D;
+  double pitch_filter = atan2(-state_.rot_end(2, 0), sx) * R2D;
+  double yaw_filter = atan2(state_.rot_end(1, 0), state_.rot_end(0, 0)) * R2D; 
+  printf("filter local poses =============================== %lf %lf %lf \n", state_.pos_end(0), state_.pos_end(1), state_.pos_end(2));
+  printf("filter local eular angles ======================== %lf %lf %lf \n", roll_filter, pitch_filter, yaw_filter);
+  printf("filter global poses ============================== %lf %lf %lf \n", pos_filter_global_(0), pos_filter_global_(1), pos_filter_global_(2));
 
 #ifdef OUTPUT_FOR_PLOTTING
   std::string bufferfile = std::to_string(state_.last_update_time) + "," + std::to_string(state_.pos_end(0))+ "," 
@@ -1328,7 +1495,7 @@ void initialization_process(rclcpp::Node::SharedPtr node)
       anchor_transition_xyz_ += pos_uwb_global;
       count_pos++; 
       std::cout<< "collecting tag data, count_pos = " << count_pos << ", count_yaw = "<< count_yaw <<std::endl;  
-      std::cout<< "pos_uwb_global = " <<std::endl<< pos_uwb_global <<std::endl; 
+      std::cout<<  std::fixed << std::setprecision(6) << "pos_uwb_global = " <<std::endl<< pos_uwb_global <<std::endl; 
     }
     std::cout<< "count_pos = " << count_pos << ", count_yaw = "<< count_yaw <<std::endl;  
     if(count_pos > threshold_anchor_pos_ && count_yaw > threshold_anchor_yaw_)
@@ -1340,13 +1507,16 @@ void initialization_process(rclcpp::Node::SharedPtr node)
   anchor_transition_xyz_ /= count_pos;
   anchor_transition_blh_ = ecef_xyz2blh(anchor_transition_xyz_);
 
-  double lat = anchor_transition_blh_.x()*D2R, lon = anchor_transition_blh_.y()*D2R;//经纬高使用 anchor_transition_blh_
+  double lon = anchor_transition_blh_.x()*D2R, lat = anchor_transition_blh_.y()*D2R;//经纬高使用 anchor_transition_blh_
   double sin_lat = sin(lat), cos_lat = cos(lat);
   double sin_lon = sin(lon), cos_lon = cos(lon);
   Eigen::Matrix3d R_ecef_enu;
-  R_ecef_enu <<  -sin_lon, -sin_lat*cos_lon, cos_lat*cos_lon,
-                  cos_lon, -sin_lat*sin_lon, cos_lat*sin_lon,
-                  0      ,  cos_lat        , sin_lat;
+  R_ecef_enu <<  -sin_lon, -cos_lon*sin_lat, cos_lon*cos_lat,
+                  cos_lon, -sin_lon*sin_lat, sin_lon*cos_lat,
+                  0      ,          cos_lat,         sin_lat;
+  // R_ecef_enu <<         -sin_lat,         -cos_lat,            0, 
+  //               -sin_lon*cos_lat, -sin_lon*sin_lat,      cos_lon,
+  //                cos_lon*cos_lat,  cos_lon*sin_lat,      sin_lon;//https://blog.51cto.com/u_16213568/8484305
   double sin_yaw_diff = std::sin(yaw_transition_enu_*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!!!!!!!!!!!!!!!!!!!!!!!!
   double cos_yaw_diff = std::cos(yaw_transition_enu_*D2R);
   Eigen::Matrix3d R_enu_local;
@@ -1359,8 +1529,10 @@ void initialization_process(rclcpp::Node::SharedPtr node)
   RCLCPP_INFO(node->get_logger(), "anchor_transition finish! cost time = %d ms", time_end - time_start);//为什么显示na秒？？？？？？
   std::cout<< "yaw_transition_enu_ = "               << yaw_transition_enu_    <<std::endl;    
   std::cout<< "anchor_transition_xyz_ = " <<std::endl<< anchor_transition_xyz_ <<std::endl;
-  std::cout<< "anchor_transition_blh_ = " <<std::endl<< anchor_transition_blh_ <<std::endl;
-  std::cout<<"!!!!!!!!!!!!  R_enu_local  !!!!!!!!!!!!!"<<std::endl<< R_enu_local <<std::endl;    
+  std::cout << std::fixed << std::setprecision(2) << "anchor_transition_blh_ = " <<std::endl<< anchor_transition_blh_ <<std::endl;
+  std::cout<< "R_enu_local = "<<std::endl<< R_enu_local <<std::endl;    
+  std::cout<< "R_ecef_enu = "<<std::endl<< R_ecef_enu <<std::endl;    
+  std::cout<< "R_ecef_local_transition_ = "<<std::endl<< R_ecef_local_transition_ <<std::endl;    
 
   std::thread filter_process(filtering_process, node);
   filter_process.detach();//异步、非阻塞
@@ -1373,13 +1545,14 @@ int main(int argc, char **argv)
   auto node = rclcpp::Node::make_shared("vtol_msn_takeoff_landing");
   RCLCPP_INFO(node->get_logger(), "////////////////////////Initialization//////////////////////////");
   //UWB的参数：[经度, 纬度, 高度, yaw]
-  std::vector<double> default_values_1 = {-122.140165, 47.641468, 122, 90.0}; // default_values for ros2 run
+  std::vector<double> default_values_1 = {-122.140165, 47.641468, 122, 0.0}; // default_values for ros2 run
   //Tag的参数：[Tag0经度, Tag0纬度, Tag0高度, Tag0yaw, Tag1东偏<m>, Tag1北偏, Tag2东偏, Tag2北偏, Tag3东偏, Tag3北偏, Tag4东偏, Tag4北偏]
   std::vector<double> default_values_2 = {-122.140165, 47.641468, 102, 0.0, -1.2, 2, 2, 1.2, -1.2, -1.2, 150, 433};
   node->declare_parameter("reference_uwb", default_values_1);
   node->declare_parameter("reference_tags", default_values_2);
   node->declare_parameter("gnss_observe_cov", 0.0015);//relative small
   node->declare_parameter("tag_observe_cov", 0.0015);
+  node->declare_parameter("super_observe_cov", 0.0015);
   node->declare_parameter("uwb_observe_cov", 0.0015);
   node->declare_parameter("compass_observe_cov", 0.0015);
   node->declare_parameter("init_cov", 0.1);
@@ -1393,6 +1566,7 @@ int main(int argc, char **argv)
   reference_tags = node->get_parameter("reference_tags").as_double_array();
   GNSS_OBSERVE_COV = node->get_parameter("gnss_observe_cov").as_double();
   TAG_OBSERVE_COV = node->get_parameter("tag_observe_cov").as_double();
+  SUPER_OBSERVE_COV = node->get_parameter("super_observe_cov").as_double();
   UWB_OBSERVE_COV = node->get_parameter("uwb_observe_cov").as_double();
   COMPASS_OBSERVE_COV = node->get_parameter("compass_observe_cov").as_double();
   R_INIT_COV = node->get_parameter("init_cov").as_double();
@@ -1416,6 +1590,7 @@ int main(int argc, char **argv)
 
   std::cout<< "GNSS_OBSERVE_COV:"<< GNSS_OBSERVE_COV <<std::endl;
   std::cout<< "TAG_OBSERVE_COV:"<< TAG_OBSERVE_COV <<std::endl;
+  std::cout<< "SUPER_OBSERVE_COV:"<< SUPER_OBSERVE_COV <<std::endl;
   std::cout<< "UWB_OBSERVE_COV:"<< UWB_OBSERVE_COV <<std::endl;
   std::cout<< "COMPASS_OBSERVE_COV:"<< COMPASS_OBSERVE_COV <<std::endl;
   std::cout<< "R_INIT_COV:"<< R_INIT_COV <<std::endl;
@@ -1441,8 +1616,21 @@ int main(int argc, char **argv)
                 [node](const sensor_msgs::msg::Imu::SharedPtr msg0) {imu_callback(msg0);});//The way to use SharedPtr in ROS2 Humble!!!!!!!!!!!!!!!!!!!!!!!
   auto tag_sub = node->create_subscription<apriltag_ros2_interfaces::msg::AprilTagDetectionArray>("/tag_detections", 10, tag_callback);//【1.5hz】
   auto compass_uwb_sub = node->create_subscription<nav_msgs::msg::Odometry>("/airsim_node/Drone51/odom_local_ned", 10, fake_compass_uwb_callback);//【100/100hz】   
-  auto super_ref_sub = node->create_subscription<std_msgs::msg::Float64MultiArray>("/super_ref", 10, super_ref_callback);              //【image_frequency/5 = 0.3hz】
-  auto super_pose_sub = node->create_subscription<geometry_msgs::msg::PoseStamped>("/super_pose", 10, super_pose_callback);//【image_frequency/5 = 0.3hz】
+
+
+  // auto super_ref_sub = node->create_subscription<std_msgs::msg::Float64MultiArray>("/super_ref", 10, super_ref_callback);              //【image_frequency/5 = 0.3hz】
+  // auto super_pose_sub = node->create_subscription<geometry_msgs::msg::PoseStamped>("/super_pose", 10, super_pose_callback);//【image_frequency/5 = 0.3hz】
+
+  message_filters::Subscriber<geometry_msgs::msg::QuaternionStamped> super_ref_sub;
+  message_filters::Subscriber<geometry_msgs::msg::PoseStamped> super_pose_sub;
+  typedef message_filters::sync_policies::ApproximateTime<geometry_msgs::msg::QuaternionStamped, geometry_msgs::msg::PoseStamped> approximate_policy;
+  
+  super_ref_sub.subscribe(node, "/super_ref");
+  super_pose_sub.subscribe(node, "/super_pose");
+  message_filters::Synchronizer<approximate_policy> syncApproximate(approximate_policy(10), super_ref_sub, super_pose_sub);
+  // syncApproximate.registerCallback(std::bind(sync_callback, std::placeholders::_1, std::placeholders::_2));
+  syncApproximate.registerCallback(sync_callback);
+
 
 #ifdef OUTPUT_FOR_PLOTTING
   std::string filename_gnss_gt = "/home/zbh/gt_data.dat"; 
