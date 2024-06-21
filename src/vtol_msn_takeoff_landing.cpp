@@ -237,7 +237,8 @@ double COMPASS_OBSERVE_COV;
 double TAG_OBSERVE_COV;
 double UWB_OBSERVE_COV;
 double SUPER_OBSERVE_COV;
-std::vector<double> reference_uwb; // for GNSS error modification in [airsim]
+std::vector<double> reference_uwb_; // for GNSS error modification in [airsim]
+std::vector<double> reference_tags_;
 
 StatesGroup state_;                                         //fliter local 变量
 FILE * m_state_fp;
@@ -528,12 +529,12 @@ void initializel_uwb(rclcpp::Node::SharedPtr node, const std::vector<double> ref
       anchor_uwb_blh_ << ref_uwb[0],ref_uwb[1],ref_uwb[2];
       yaw_uwb_enu = ref_uwb[3];
   } else {
-    RCLCPP_ERROR(node->get_logger(), "empty reference_uwb!!!!!!");
+    RCLCPP_ERROR(node->get_logger(), "empty reference_uwb_!!!!!!");
   }
 
   anchor_uwb_xyz_ = ecef_blh2xyz(anchor_uwb_blh_);
   std::cout<<std::endl<<"uwb's anchor in BLH = "<<std::endl<<anchor_uwb_blh_;
-  std::cout<<std::endl<<"uwb's anchor in xyz = "<<std::endl<<anchor_uwb_xyz_;
+  std::cout<< std::fixed << std::setprecision(6) <<std::endl<<"uwb's anchor in xyz = "<<std::endl<<anchor_uwb_xyz_;
   std::cout<<std::endl<<"uwb' yaw in degree = " <<yaw_uwb_enu;
 
   //anchor确定了ENU坐标和ECEF坐标的转换关系
@@ -562,31 +563,31 @@ Eigen::Vector3d ecef_tag0_2_tagx(Eigen::Vector3d& tag0_blh, Eigen::Vector3d& tag
   Eigen::Vector3d tagx_xyz;
   tagx_xyz << tag0_xyz[0] - delta_E * std::sin(tag0_blh[0]*D2R) - delta_N * std::cos(tag0_blh[0]*D2R) * std::sin(tag0_blh[1]*D2R),
               tag0_xyz[1] + delta_E * std::cos(tag0_blh[0]*D2R) - delta_N * std::sin(tag0_blh[0]*D2R) * std::sin(tag0_blh[1]*D2R),
-              tag0_xyz[2]                                       - delta_N                             * std::cos(tag0_blh[1]*D2R);
+              tag0_xyz[2]                                       + delta_N                             * std::cos(tag0_blh[1]*D2R);
   return tagx_xyz;
 }
 
-void initializel_tag(rclcpp::Node::SharedPtr node, const std::vector<double> reference_tags)//tag_file没有后缀名
+void initializel_tag(rclcpp::Node::SharedPtr node, const std::vector<double> reference_tags_)//tag_file没有后缀名
 {
-  if (!reference_tags.empty()) {
-      anchor_tag0_blh_ << reference_tags[0],reference_tags[1],reference_tags[2];
-      double yaw_tagbase_enu_ = reference_tags[3];
+  if (!reference_tags_.empty()) {
+      anchor_tag0_blh_ << reference_tags_[0],reference_tags_[1],reference_tags_[2];
+      double yaw_tagbase_enu_ = reference_tags_[3];
   } else {
-    RCLCPP_ERROR(node->get_logger(), "empty reference_tags!!!!!!");
+    RCLCPP_ERROR(node->get_logger(), "empty reference_tags_!!!!!!");
   }
 
   anchor_tag0_xyz_ = ecef_blh2xyz(anchor_tag0_blh_);
-  anchor_tag1_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags[4],reference_tags[5]);
-  anchor_tag2_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags[6],reference_tags[7]);
-  anchor_tag3_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags[8],reference_tags[9]);
-  anchor_tag4_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags[10],reference_tags[11]);
+  anchor_tag1_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags_[4],reference_tags_[5]);
+  anchor_tag2_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags_[6],reference_tags_[7]);
+  anchor_tag3_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags_[8],reference_tags_[9]);
+  anchor_tag4_xyz_ = ecef_tag0_2_tagx(anchor_tag0_blh_, anchor_tag0_xyz_, reference_tags_[10],reference_tags_[11]);
   std::cout<<std::endl<<"tag0's anchor in BLH = "<<std::endl<<anchor_tag0_blh_;
-  std::cout<<std::endl<<"tag0's anchor in xyz = "<<std::endl<<anchor_tag0_xyz_;
+  std::cout<< std::fixed << std::setprecision(6) <<std::endl<<"tag0's anchor in xyz = "<<std::endl<<anchor_tag0_xyz_;
   std::cout<<std::endl<<"tags' yaw in degree = " <<yaw_tagbase_enu_;
-  std::cout<<std::endl<<"tag1's anchor in xyz = "<<std::endl<<anchor_tag1_xyz_;
-  std::cout<<std::endl<<"tag2's anchor in xyz = "<<std::endl<<anchor_tag2_xyz_;
-  std::cout<<std::endl<<"tag3's anchor in xyz = "<<std::endl<<anchor_tag3_xyz_;
-  std::cout<<std::endl<<"tag4's anchor in xyz = "<<std::endl<<anchor_tag4_xyz_;
+  std::cout<< std::fixed << std::setprecision(6) <<std::endl<<"tag1's anchor in xyz = "<<std::endl<<anchor_tag1_xyz_;
+  std::cout<< std::fixed << std::setprecision(6) <<std::endl<<"tag2's anchor in xyz = "<<std::endl<<anchor_tag2_xyz_;
+  std::cout<< std::fixed << std::setprecision(6) <<std::endl<<"tag3's anchor in xyz = "<<std::endl<<anchor_tag3_xyz_;
+  std::cout<< std::fixed << std::setprecision(6) <<std::endl<<"tag4's anchor in xyz = "<<std::endl<<anchor_tag4_xyz_;
 
   //anchor确定了ENU坐标和ECEF坐标的转换关系，tag的 R_ecef_enu_ 近似使用uwb计算得到的
   double sin_yaw_diff = std::sin(yaw_tagbase_enu_*D2R);//从local到enu：sin(yaw);从enu到local：sin(-yaw)!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -620,7 +621,7 @@ void filter_global2local(const Eigen::Vector3d& pos_global, const Eigen::Matrix3
   Eigen::Matrix3d rot_local;
   rot_local = R_ecef_local_transition_.inverse() * rot_global;
   // std::cout<<std::endl<<"======== rot_global ========"<<std::endl<< rot_global <<std::endl;  
-  // std::cout<<std::endl<<"======== measurement ========"<<std::endl<< rot_local <<std::endl<< pos_local <<std::endl;  
+  std::cout<<std::endl<<"======== measurement ========"<<std::endl<< rot_local <<std::endl<< pos_local <<std::endl;  
   Eigen::Matrix3d rot_diff =  g_state.rot_end.inverse()*rot_local;
   // std::cout<<std::endl<<"======== rot_diff ========"<<std::endl<< rot_diff <<std::endl;  
   state.head<3>() = SO3_LOG(g_state.rot_end.inverse()*rot_local);//姿态在先！！！！！！！！！！！！！！！！
@@ -735,9 +736,10 @@ void fake_compass_uwb_callback(const nav_msgs::msg::Odometry& odom)
   Eigen::Vector3d pos_uwb_local, pos_uwb_global;
   //[airsim] UWB坐标取值来自odom_local_ned，UWB局部坐标系为ENU，所以X_uwb = Y_ned, Y_uwb = X_ned, Z_uwb = -Z_ned， UWB外参为零。   
   pos_uwb_local << odom.pose.pose.position.y, odom.pose.pose.position.x, -odom.pose.pose.position.z;
-  if(sqrt(pos_uwb_local(0)*pos_uwb_local(0) + pos_uwb_local(1)*pos_uwb_local(1) + pos_uwb_local(2)*pos_uwb_local(2)) > 75)
+  if(sqrt(pos_uwb_local(0)*pos_uwb_local(0) + pos_uwb_local(1)*pos_uwb_local(1) + pos_uwb_local(2)*pos_uwb_local(2)) > 75 & 
+     sqrt((pos_uwb_local(0)-reference_tags_[10])*(pos_uwb_local(0)-reference_tags_[10]) + (pos_uwb_local(1)-reference_tags_[11])*(pos_uwb_local(1)-reference_tags_[11]) + pos_uwb_local(2)*pos_uwb_local(2)) > 75)
   {
-    printf("///////////////pos_uwb out of range///////////////\n");      
+    printf("pos_uwb out of range, more than 75m from [0,0,0] or [150,433,0]\n");      
     return;
   }
   printf("pos_uwb_local = %lf %lf %lf \n", odom.pose.pose.position.y, odom.pose.pose.position.x, -odom.pose.pose.position.z);      
@@ -809,7 +811,7 @@ void sync_callback(const geometry_msgs::msg::QuaternionStamped& ref, const geome
                    -1,  0,  0,
                     0,  0, -1;   
   Eigen::Matrix3d rot_super_global = R_ecef_camera_super_ * rot_super_camera * R_camera_body;  // we need body attitude, not camera attitude!!!
-  std::cout<<std::endl<<"pos_super_global ========"<<std::endl<< pos_super_global <<std::endl;  
+  // std::cout<<std::endl<<"pos_super_global ========"<<std::endl<< pos_super_global <<std::endl;  
   // std::cout<<std::endl<<"rot_super_global ========"<<std::endl<< rot_super_global <<std::endl;  
 
   time_super_last_ = super_pose.header.stamp.sec + super_pose.header.stamp.nanosec * 1e-9;
@@ -949,8 +951,8 @@ void tag_callback(const apriltag_ros2_interfaces::msg::AprilTagDetectionArray& t
   Eigen::Matrix3d rot_tag_global; 
   double yaw_tag_enu; 
   tag_local2global(pos_tag_local, rot_tag_local, id, pos_tag_global, rot_tag_global, yaw_tag_enu);
-  // std::cout<<std::endl<<"rot_tag_local ========"<<std::endl<< rot_tag_local <<std::endl;  
-  // std::cout<<std::endl<<"rot_tag_global ========"<<std::endl<< rot_tag_global <<std::endl;  
+  std::cout<<std::endl<<"tag id ======== "<< id <<std::endl;  
+  std::cout<<std::endl<<"pos_tag_global ========"<<std::endl<< pos_tag_global <<std::endl;  
 
   time_tag_last_ = tags.header.stamp.sec + tags.header.stamp.nanosec * 1e-9;
 
@@ -994,7 +996,7 @@ void gnss_callback(const sensor_msgs::msg::NavSatFix& data_gnss)//
   Eigen::Vector3d blh;
 
   // for GNSS error modification in [airsim]
-  blh << reference_uwb[0] + (data_gnss.longitude-reference_uwb[0])/1.487, reference_uwb[1] + (data_gnss.latitude-reference_uwb[1])/0.535, data_gnss.altitude;
+  blh << reference_uwb_[0] + (data_gnss.longitude-reference_uwb_[0])/1.487, reference_uwb_[1] + (data_gnss.latitude-reference_uwb_[1])/0.535, data_gnss.altitude;
 
   // blh << data_gnss.longitude, data_gnss.latitude, data_gnss.altitude;
   std::cout << std::setprecision(9) << blh <<std::endl;    
@@ -1322,11 +1324,11 @@ void filtering_process(rclcpp::Node::SharedPtr node)
       // std::cout<<"======== state_ before new super_pose ========"<<std::endl<< state_.rot_end <<std::endl<< state_.pos_end <<std::endl<< state_.vel_end <<std::endl;    
       // std::cout<<"========  meas_vec  ========"<<std::endl<< meas_vec <<std::endl;  
       // std::cout<<"======== state_.cov ========"<<std::endl<< state_.cov <<std::endl;      
-      double latency = node->get_clock()->now().nanoseconds()*1e-9 - time_super_last_;//<s>
-      if(latency > 0.1)//trigger the Out Of Sequenence Measurement method
-      {
-        RCLCPP_INFO(node->get_logger(), "!!!!!!!! OOSM !!!!!!!!");
-      }
+      // double latency = node->get_clock()->now().nanoseconds()*1e-9 - time_super_last_;//<s>
+      // if(latency > 0.1)//trigger the Out Of Sequenence Measurement method
+      // {
+      //   RCLCPP_INFO(node->get_logger(), "!!!!!!!! OOSM !!!!!!!!");
+      // }
       // Eigen::Matrix< double, DIM_OF_STATES, 1 > d_state;//[9x1]
       d_state.setZero();      // 误差状态反馈到系统状态后,将误差状态清零
       Eigen::MatrixXd Hsub(6,9);
@@ -1548,8 +1550,8 @@ int main(int argc, char **argv)
   std::vector<double> default_values_1 = {-122.140165, 47.641468, 122, 0.0}; // default_values for ros2 run
   //Tag的参数：[Tag0经度, Tag0纬度, Tag0高度, Tag0yaw, Tag1东偏<m>, Tag1北偏, Tag2东偏, Tag2北偏, Tag3东偏, Tag3北偏, Tag4东偏, Tag4北偏]
   std::vector<double> default_values_2 = {-122.140165, 47.641468, 102, 0.0, -1.2, 2, 2, 1.2, -1.2, -1.2, 150, 433};
-  node->declare_parameter("reference_uwb", default_values_1);
-  node->declare_parameter("reference_tags", default_values_2);
+  node->declare_parameter("reference_uwb_", default_values_1);
+  node->declare_parameter("reference_tags_", default_values_2);
   node->declare_parameter("gnss_observe_cov", 0.0015);//relative small
   node->declare_parameter("tag_observe_cov", 0.0015);
   node->declare_parameter("super_observe_cov", 0.0015);
@@ -1560,10 +1562,8 @@ int main(int argc, char **argv)
   node->declare_parameter("vel_noise", 0.2);
   node->declare_parameter("acc_noise", 0.4);
 
-  std::vector<double> reference_tags;
-  // std::vector<double> reference_tags, reference_uwb;
-  reference_uwb = node->get_parameter("reference_uwb").as_double_array();
-  reference_tags = node->get_parameter("reference_tags").as_double_array();
+  reference_uwb_ = node->get_parameter("reference_uwb_").as_double_array();
+  reference_tags_ = node->get_parameter("reference_tags_").as_double_array();
   GNSS_OBSERVE_COV = node->get_parameter("gnss_observe_cov").as_double();
   TAG_OBSERVE_COV = node->get_parameter("tag_observe_cov").as_double();
   SUPER_OBSERVE_COV = node->get_parameter("super_observe_cov").as_double();
@@ -1576,14 +1576,14 @@ int main(int argc, char **argv)
   COV_VEL_NOISE_DIAG = node->get_parameter("vel_noise").as_double();
   COV_ACC_NOISE_DIAG = node->get_parameter("acc_noise").as_double();
 
-  std::cout<< "reference_tags:";
-  for (const auto &value : reference_tags) {
+  std::cout<< "reference_tags_:";
+  for (const auto &value : reference_tags_) {
     std::cout << value << " ";
   }
   std::cout << std::endl;
 
-  std::cout<< "reference_uwb:";
-    for (const auto &value : reference_uwb) {
+  std::cout<< "reference_uwb_:";
+    for (const auto &value : reference_uwb_) {
     std::cout << value << " ";
   }
   std::cout << std::endl;
@@ -1647,8 +1647,8 @@ int main(int argc, char **argv)
   pub_odom_filter_global__ = node->create_publisher<nav_msgs::msg::Odometry>("/vtol_msn/odom_filter_global_", 100);
 #endif
 
-  initializel_uwb(node, reference_uwb);//先执行，以获得R_ecef_enu_
-  initializel_tag(node, reference_tags);
+  initializel_uwb(node, reference_uwb_);//先执行，以获得R_ecef_enu_
+  initializel_tag(node, reference_tags_);
 
   std::thread initial_process(initialization_process, node);
   initial_process.detach();//异步、no阻塞
